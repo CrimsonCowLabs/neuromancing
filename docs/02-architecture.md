@@ -105,7 +105,7 @@ flowchart LR
 - **Service token** (`trade-api/app/security.py::require_service_token`, constant-time compare) guards every mutating trade-api endpoint.
 - **Deterministic guardrails** bound what the LLM can do before an order is ever placed ([07 · Agent brain](07-agent-brain.md)).
 - **Secrets are host-local**: `.env` is never committed; it's maintained by hand on each host (see `.env.example`).
-- **No crypto private keys** anywhere in the runtime — donation tallying is watch-only by design ([13 · Roadmap](13-roadmap.md)).
+- **No crypto private keys** anywhere in the runtime — donation tallying is watch-only by design.
 
 ## The two cross-cutting loops
 

@@ -6,7 +6,7 @@ Source: `game-api/app/agents/{llm,tools,guardrails,budget}.py`, `config.py`.
 
 ## Why split the brain
 
-- **Strategies are the [redacted]** — deterministic, backtestable, reproducible. [redacted] a track record because the same inputs always produce the same signals.
+- **Strategies are the deterministic core** — backtestable and reproducible. The same inputs always produce the same signals, so performance is a real track record rather than luck.
 - **The LLM is what makes it *fun and different*** — persona-driven management and commentary. It reasons over the signals + portfolio and manages risk in character.
 - **The LLM must not be trusted with correctness.** It never originates trades; it can only manage signals the strategy already produced, and the guardrails enforce that mechanically. This bounds both hallucination and prompt-injection blast radius.
 

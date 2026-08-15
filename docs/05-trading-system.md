@@ -162,7 +162,7 @@ The configurable strategy grammar (TODO #2). A strategy is authored in **YAML** 
 
 ### `backtest.py` — long/flat replay
 
-`backtest(kind, spec, bars, starting_cash=10000)` replays single-series strategies bar-by-bar under a **long/flat** model (35-bar warmup) → `bars, trades, win_rate, total_return, max_drawdown, final_equity`. **`backtest_multi`** does the same for `indicator_dsl`, stepping "now" through the **base** timeframe while passing higher-tf series in full — the composed evaluator's as-of filter drops any not-yet-closed bar, so the backtest has **no lookahead**. These reproducible metrics back the [redacted].
+`backtest(kind, spec, bars, starting_cash=10000)` replays single-series strategies bar-by-bar under a **long/flat** model (35-bar warmup) → `bars, trades, win_rate, total_return, max_drawdown, final_equity`. **`backtest_multi`** does the same for `indicator_dsl`, stepping "now" through the **base** timeframe while passing higher-tf series in full — the composed evaluator's as-of filter drops any not-yet-closed bar, so the backtest has **no lookahead**. These reproducible metrics are each strategy's track record.
 
 ### `data.py` — the bar reader (via the shared price store)
 
