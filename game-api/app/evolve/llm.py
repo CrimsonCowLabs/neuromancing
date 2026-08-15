@@ -1,6 +1,8 @@
-"""LangChain ChatOpenAI clients pointed at Ollama Cloud (never Anthropic) — a strong
-reasoner for design/critique + flash for reflection/compaction. Same endpoint pattern
-as agents/llm.py; models read from config, never hardcoded."""
+"""LangChain ChatOpenAI clients for the evolution layer — a strong reasoner for
+design/critique + flash for reflection/compaction. Transport (base_url/key/timeout/
+headers) + default models come from the shared provider seam (app/llm/provider.py), so
+evolution honors the same LLM_PROVIDER config as the agent decision path. Ollama is the
+default (D4); models read from config, never hardcoded."""
 
 from __future__ import annotations
 
@@ -8,33 +10,38 @@ from functools import lru_cache
 
 from langchain_openai import ChatOpenAI
 
-from ..config import get_settings
+from ..llm import provider
 
 
 @lru_cache(maxsize=8)
-def _mk(model: str, timeout: float, temperature: float) -> ChatOpenAI:
-    s = get_settings()
+def _mk(base_url: str, api_key: str, model: str, timeout: float,
+        temperature: float, headers_items: tuple) -> ChatOpenAI:
     return ChatOpenAI(
-        base_url=s.ollama_host,           # https://ollama.com/v1
-        api_key=s.ollama_api_key or "none",
+        base_url=base_url,
+        api_key=api_key or "none",
         model=model,
         timeout=timeout,
         max_retries=0,                    # Temporal owns retries
         temperature=temperature,
+        default_headers=dict(headers_items) or None,
     )
+
+
+def _client(role: str, temperature: float) -> ChatOpenAI:
+    pc = provider.resolve_provider(role)
+    return _mk(pc.base_url, pc.api_key, pc.model, pc.timeout, temperature,
+               tuple(sorted(pc.default_headers.items())))
 
 
 def reasoner() -> ChatOpenAI:
     """Strong model for strategy design/critique."""
-    s = get_settings()
-    return _mk(s.reasoning_model, s.ollama_reasoning_timeout_s, 0.5)
+    return _client("reasoner", 0.5)
 
 
 def flash() -> ChatOpenAI:
     """Cheap model for reflection / summarization / compaction."""
-    s = get_settings()
-    return _mk(s.ollama_model, s.ollama_timeout_s, 0.3)
+    return _client("flash", 0.3)
 
 
 def has_key() -> bool:
-    return bool(get_settings().ollama_api_key)
+    return provider.has_key()
