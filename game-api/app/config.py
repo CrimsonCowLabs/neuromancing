@@ -51,9 +51,22 @@ class Settings(BaseServiceSettings):
     def poll_seconds(self) -> dict[str, int]:
         return self._tf_map(self.price_poll_seconds)
 
-    # Ollama Cloud (LLM management layer). We never use Anthropic.
-    # Accessed via the OpenAI-COMPATIBLE endpoint (…/v1) — the pattern proven in
-    # the hl-froggy trading system. OLLAMA_HOST carries the /v1 base URL.
+    # ---- LLM provider seam (open-source: bring your own OpenAI-compatible provider) ----
+    # Default is Ollama Cloud (D4). Set LLM_PROVIDER=openrouter|local|custom to switch;
+    # Anthropic is reachable THROUGH OpenRouter (no native Anthropic client here). See
+    # app/llm/provider.py. The ollama_* settings below remain the ollama preset's values,
+    # so a deployment that sets none of the LLM_* vars behaves exactly as before.
+    llm_provider: str = "ollama"      # ollama | openrouter | local | custom
+    llm_base_url: str = ""            # override the preset base_url (required for custom)
+    llm_api_key: str = ""             # generic key; falls back to OLLAMA_API_KEY for ollama
+    llm_model: str = ""               # override the standard/flash model (else OLLAMA_MODEL)
+    llm_reasoning_model: str = ""     # override the reasoner model (else the reasoning_model)
+    llm_referer: str = ""             # OpenRouter attribution header (HTTP-Referer), optional
+    llm_title: str = ""               # OpenRouter attribution header (X-Title), optional
+
+    # Ollama Cloud is the default provider (D4). Accessed via the OpenAI-COMPATIBLE
+    # endpoint (…/v1) — the pattern proven in the hl-froggy trading system. OLLAMA_HOST
+    # carries the /v1 base URL. These are the values the "ollama" preset resolves to.
     ollama_host: str = "https://ollama.com/v1"
     ollama_api_key: str = ""
     ollama_model: str = "deepseek-v4-flash:0731"

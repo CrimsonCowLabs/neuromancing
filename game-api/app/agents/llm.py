@@ -17,6 +17,7 @@ import json
 import logging
 
 from ..config import get_settings
+from ..llm import provider
 from . import budget
 from .tools import TOOLS
 
@@ -24,24 +25,27 @@ log = logging.getLogger("neuromancing.llm")
 
 FALLBACK_MODEL = "deterministic-fallback"
 
-# Reused across calls — one client + connection pool, not one per tick/agent.
-_client = None
+# Reused across calls — one client + pool per provider base_url, not one per tick/agent.
+_clients: dict[str, object] = {}
 _sem: asyncio.Semaphore | None = None
 
 
-def _get_client():
-    global _client
-    if _client is None:
+def _get_client(pc: provider.ProviderConfig):
+    """Cached AsyncOpenAI client for a resolved provider (keyed by base_url so a
+    config change is honored). Works for any OpenAI-compatible endpoint."""
+    cli = _clients.get(pc.base_url)
+    if cli is None:
         from openai import AsyncOpenAI
 
-        s = get_settings()
-        _client = AsyncOpenAI(
-            base_url=s.ollama_host,
-            api_key=s.ollama_api_key,
-            timeout=s.ollama_timeout_s,
+        cli = AsyncOpenAI(
+            base_url=pc.base_url,
+            api_key=pc.api_key or "none",
+            timeout=pc.timeout,
             max_retries=0,  # exactly one attempt — Temporal owns retries, no stacking
+            default_headers=pc.default_headers or None,
         )
-    return _client
+        _clients[pc.base_url] = cli
+    return cli
 
 
 def _semaphore() -> asyncio.Semaphore:
@@ -61,12 +65,37 @@ def _system_prompt(persona: dict) -> str:
         "signals; you decide position sizing, which signals to act on or skip, when "
         "to close, and overall risk. You may ONLY act on symbols that have a current "
         "signal (to buy) or an open position (to close/sell). Never invent trades. "
+        "Each signal carries `sources` (the per-strategy signals behind it, each with "
+        "indicator `features`) and a `conflict` flag when your own strategies disagree "
+        "on that symbol — weigh both when sizing or skipping; be more cautious on "
+        "conflict. "
         "Use size_order/close_position/skip_signal for decisions and post_to_feed for "
         "one short in-character message. Set a stop_loss_pct on every buy (and, when it "
         "fits your style, a take_profit_pct or trailing_stop_pct) — these are enforced "
         "deterministically the instant price crosses them. Never give financial advice "
         "or promise returns."
     )
+
+
+def _llm_view(context: dict) -> dict:
+    """Trim the context to just what the model reasons over, so per-tick token cost
+    stays bounded regardless of universe size. The model may only act on symbols with
+    a current signal or an open position, so it needs marks for *those* only — not the
+    whole (now up to ~1000-symbol) universe. The full `marks`/`universe` stay in
+    `context` for the server-side guardrails/sizing path (see decision.apply_activity)."""
+    signals = context.get("signals", {})
+    positions = context.get("positions", {})
+    marks = context.get("marks", {})
+    keep = set(signals) | set(positions)
+    return {
+        "equity": context.get("equity"),
+        "cash": context.get("cash"),
+        "positions": positions,
+        "position_values": context.get("position_values", {}),
+        "signals": signals,
+        "marks": {s: marks[s] for s in keep if s in marks},
+        "equity_open": context.get("equity_open", True),
+    }
 
 
 def _fallback(context: dict, persona: dict) -> dict:
@@ -139,10 +168,11 @@ async def _fallback_with_reason(context: dict, persona: dict, model: str, reason
 
 
 async def manage(context: dict, persona: dict, handle: str = "unknown") -> dict:
-    settings = get_settings()
-    model = persona.get("model_config", {}).get("model") or settings.ollama_model
+    pc = provider.resolve_provider("manage")
+    # Per-persona model override wins over the provider's default model.
+    model = persona.get("model_config", {}).get("model") or pc.model
 
-    if not settings.ollama_api_key:
+    if not pc.api_key:
         return await _fallback_with_reason(context, persona, model, "no_api_key")
 
     # Circuit-breaker: if the daily token budget is spent, don't call the LLM.
@@ -154,11 +184,11 @@ async def manage(context: dict, persona: dict, handle: str = "unknown") -> dict:
         from openai import APIError, APITimeoutError
 
         async with _semaphore():
-            resp = await _get_client().chat.completions.create(
+            resp = await _get_client(pc).chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "system", "content": _system_prompt(persona)},
-                    {"role": "user", "content": json.dumps(context, default=str)},
+                    {"role": "user", "content": json.dumps(_llm_view(context), default=str)},
                 ],
                 tools=TOOLS,
                 tool_choice="auto",

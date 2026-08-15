@@ -45,6 +45,59 @@ def actionable_signals(
     return out
 
 
+def _trim_features(features: dict | None) -> dict:
+    """Keep only compact scalar indicator features (rounded floats), dropping any
+    lists/nested dicts, so per-symbol `sources` stay cheap to serialize to the LLM."""
+    if not features:
+        return {}
+    out: dict = {}
+    for k, v in features.items():
+        if isinstance(v, bool) or isinstance(v, int) or isinstance(v, str):
+            out[k] = v
+        elif isinstance(v, float):
+            out[k] = round(v, 4)
+        # skip lists/dicts — bound the payload
+    return out
+
+
+def merge_signals(evaluations: list[tuple[int, list[dict]]]) -> tuple[dict, dict]:
+    """Aggregate per-strategy signals per symbol. Returns (primary, sources):
+
+    - `primary[symbol]` = the strength-max winner `{action, strength, strategy_id}`
+      (unchanged shape, so actionable_signals/guardrails/the fallback are untouched).
+    - `sources[symbol]` = every contributing strategy's signal
+      `{strategy_id, action, strength, features}` — so the LLM can see indicator
+      features and disagreement instead of a single collapsed action. Pure.
+    """
+    primary: dict[str, dict] = {}
+    sources: dict[str, list[dict]] = {}
+    for sid, sigs in evaluations:
+        for s in sigs:
+            if s.get("action") == "hold":
+                continue
+            sym = s["symbol"]
+            sources.setdefault(sym, []).append({
+                "strategy_id": sid, "action": s["action"],
+                "strength": s["strength"], "features": _trim_features(s.get("features")),
+            })
+            prev = primary.get(sym)
+            if prev is None or s["strength"] > prev["strength"]:
+                primary[sym] = {"action": s["action"], "strength": s["strength"],
+                                "strategy_id": sid}
+    return primary, sources
+
+
+def enrich_actionable(signals: dict, sources: dict) -> dict:
+    """Attach each *actionable* signal's per-strategy `sources` + a `conflict` flag
+    (strategies disagree on the action). Only actionable symbols are enriched, so the
+    richer payload stays bounded even with a wide universe. Mutates and returns."""
+    for sym, sig in signals.items():
+        srcs = sources.get(sym, [])
+        sig["sources"] = srcs
+        sig["conflict"] = len({s["action"] for s in srcs}) > 1
+    return signals
+
+
 async def _last_price(symbol: str) -> float | None:
     raw = await _redis.get(f"quote:{symbol}")
     if not raw:
@@ -108,7 +161,7 @@ async def build_context(agent: dict, equity_open: bool = True) -> dict | None:
     # carries its own per-indicator timeframes in its spec and the trade-api evaluate
     # endpoint honors those over this value.
     timeframe = agent.get("timeframe") or "1m"
-    signals: dict[str, dict] = {}
+    evaluations: list[tuple[int, list[dict]]] = []
     for sid in agent["strategy_ids"]:
         try:
             sigs = await trade.evaluate_strategy(
@@ -116,15 +169,11 @@ async def build_context(agent: dict, equity_open: bool = True) -> dict | None:
         except Exception as e:  # noqa: BLE001
             log.warning("strategy %s eval failed: %s", sid, e)
             continue
-        for s in sigs:
-            if s["action"] == "hold":
-                continue
-            prev = signals.get(s["symbol"])
-            if prev is None or s["strength"] > prev["strength"]:
-                # Keep which strategy produced the winning signal so the trade diary
-                # can attribute the trade to a strategy (deep-agent reflection, #3).
-                signals[s["symbol"]] = {"action": s["action"], "strength": s["strength"],
-                                        "strategy_id": sid}
+        evaluations.append((sid, sigs))
+    # Primary = strength-max winner per symbol (drives actionable/guardrails/fallback);
+    # sources = every strategy's signal per symbol, surfaced to the LLM so features and
+    # cross-strategy disagreement aren't silently collapsed away (#2).
+    signals, sources = merge_signals(evaluations)
 
     # When the equity market is closed, drop equity signals so mixed agents only
     # consider crypto after hours (equity orders can't fill on stale prices anyway).
@@ -135,6 +184,8 @@ async def build_context(agent: dict, equity_open: bool = True) -> dict | None:
     # signal (already-held position at its cap) doesn't invoke the LLM every tick.
     max_pos_pct = float(agent.get("risk_profile", {}).get("max_position_pct", DEFAULT_MAX_POSITION_PCT))
     signals = actionable_signals(signals, positions, position_values, equity, max_pos_pct)
+    # Enrich only the actionable survivors with their per-strategy sources + conflict.
+    enrich_actionable(signals, sources)
 
     return {
         "account_id": account_id,
