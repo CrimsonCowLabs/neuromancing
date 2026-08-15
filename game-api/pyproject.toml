@@ -40,6 +40,12 @@ neuromancing-shared = { path = "../shared" }
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# `live` tests need a real LLM provider key + infra (game DB, Redis, trade-api). They
+# are skipped by default (see tests/conftest.py) and never run in offline CI. Run with:
+#   uv run pytest -m live
+markers = [
+    "live: end-to-end test that calls a real LLM provider (needs a key + infra)",
+]
 
 [build-system]
 requires = ["hatchling"]
