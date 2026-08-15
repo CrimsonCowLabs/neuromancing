@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# uv
+# (uv.lock IS committed)
+
+# Node / Next.js
+node_modules/
+web/.next/
+web/out/
+web/.turbo/
+*.tsbuildinfo
+
+# Env & secrets — NEVER commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+xpub.txt
+
+# Local dev
+docker-compose.override.yml
+data/
+db-dumps/
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# Build artifacts
+dist/
+build/
+releases/
+
+# Private / infra — kept local, NEVER published (describe the maintainer's own setup)
+Aaron-*.md
+CLAUDE.md
+deploy.sh
+.rsync-exclude
+docker-compose.override.yml.example
+docs/DEPLOY.md
+docs/11-operations.md
