@@ -1,0 +1,194 @@
+"""LLM management layer via Ollama Cloud (never Anthropic).
+
+Accessed through Ollama Cloud's OpenAI-COMPATIBLE endpoint (base_url …/v1) using
+the `openai` SDK — the pattern proven in the hl-froggy trading system. A HARD
+TIMEOUT is mandatory (hl-froggy incident 2026-04-08: a stuck call froze the loop
+for 22h). When no OLLAMA_API_KEY is set or the call fails, a deterministic
+fallback manager runs so the game still plays headlessly.
+
+Given the tick's strategy signals + portfolio/risk state, decide sizing, which
+signals to take/skip, closes, and a social post — in persona voice.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+
+from ..config import get_settings
+from . import budget
+from .tools import TOOLS
+
+log = logging.getLogger("neuromancing.llm")
+
+FALLBACK_MODEL = "deterministic-fallback"
+
+# Reused across calls — one client + connection pool, not one per tick/agent.
+_client = None
+_sem: asyncio.Semaphore | None = None
+
+
+def _get_client():
+    global _client
+    if _client is None:
+        from openai import AsyncOpenAI
+
+        s = get_settings()
+        _client = AsyncOpenAI(
+            base_url=s.ollama_host,
+            api_key=s.ollama_api_key,
+            timeout=s.ollama_timeout_s,
+            max_retries=0,  # exactly one attempt — Temporal owns retries, no stacking
+        )
+    return _client
+
+
+def _semaphore() -> asyncio.Semaphore:
+    global _sem
+    if _sem is None:
+        _sem = asyncio.Semaphore(get_settings().ollama_max_concurrency)
+    return _sem
+
+
+def _system_prompt(persona: dict) -> str:
+    return (
+        f"You are {persona.get('display_name', 'a trader')}, an autonomous trading agent.\n"
+        f"Thesis: {persona.get('thesis', '')}\n"
+        f"Voice: {persona.get('voice_style', 'concise, confident')}\n"
+        f"Risk temperament: {persona.get('risk_temperament', 'balanced')}\n\n"
+        "You are the MANAGEMENT layer. Deterministic strategies produce the trade "
+        "signals; you decide position sizing, which signals to act on or skip, when "
+        "to close, and overall risk. You may ONLY act on symbols that have a current "
+        "signal (to buy) or an open position (to close/sell). Never invent trades. "
+        "Use size_order/close_position/skip_signal for decisions and post_to_feed for "
+        "one short in-character message. Set a stop_loss_pct on every buy (and, when it "
+        "fits your style, a take_profit_pct or trailing_stop_pct) — these are enforced "
+        "deterministically the instant price crosses them. Never give financial advice "
+        "or promise returns."
+    )
+
+
+def _fallback(context: dict, persona: dict) -> dict:
+    """Conservative deterministic manager: size buys at a fixed fraction of equity,
+    close on exit signals. Runs when the LLM is unavailable."""
+    equity = float(context.get("equity", 0.0))
+    signals = context.get("signals", {})  # symbol -> {action, strength}
+    positions = context.get("positions", {})
+    actions: list[dict] = []
+    notes: list[str] = []
+    for symbol, sig in signals.items():
+        action = sig.get("action")
+        strength = float(sig.get("strength", 0.0))
+        if action == "buy":
+            notional = round(max(50.0, equity * 0.08 * (0.5 + strength)), 2)
+            actions.append({"type": "order", "symbol": symbol, "side": "buy",
+                            "notional": notional, "rationale": f"signal buy (strength {strength:.2f})"})
+            notes.append(f"opening {symbol}")
+        elif action in ("exit", "sell") and positions.get(symbol, 0) > 0:
+            actions.append({"type": "close", "symbol": symbol,
+                            "rationale": "signal exit"})
+            notes.append(f"closing {symbol}")
+
+    narration = "; ".join(notes) if notes else "holding — no compelling signals this tick"
+    post = None
+    if notes:
+        post = {"body": f"{narration.capitalize()}. Managing risk, staying disciplined.",
+                "kind": "trade_note"}
+    return {
+        "actions": actions,
+        "narration": narration,
+        "posts": [post] if post else [],
+        "model": FALLBACK_MODEL,
+        "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0,
+    }
+
+
+def _parse_tool_calls(message) -> dict:
+    """Parse OpenAI-style tool_calls (function.name + JSON-string arguments)."""
+    actions: list[dict] = []
+    posts: list[dict] = []
+    notes: list[str] = []
+    for call in getattr(message, "tool_calls", None) or []:
+        fn = call.function
+        try:
+            args = fn.arguments if isinstance(fn.arguments, dict) else json.loads(fn.arguments)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if fn.name == "size_order":
+            act = {"type": "order", "symbol": args["symbol"], "side": args["side"],
+                   "notional": float(args["notional"]), "rationale": args.get("rationale", "")}
+            for k in ("stop_loss_pct", "take_profit_pct", "trailing_stop_pct"):
+                if args.get(k) is not None:
+                    act[k] = float(args[k])
+            actions.append(act)
+            notes.append(args.get("rationale", ""))
+        elif fn.name == "close_position":
+            actions.append({"type": "close", "symbol": args["symbol"],
+                            "rationale": args.get("rationale", "")})
+            notes.append(args.get("rationale", ""))
+        elif fn.name == "post_to_feed":
+            posts.append({"body": str(args.get("body", ""))[:280], "kind": args.get("kind", "take")})
+        # skip_signal -> intentionally no action
+    return {"actions": actions, "posts": posts, "narration": "; ".join(n for n in notes if n)}
+
+
+async def _fallback_with_reason(context: dict, persona: dict, model: str, reason: str) -> dict:
+    await budget.record_fallback(model, reason)
+    return _fallback(context, persona)
+
+
+async def manage(context: dict, persona: dict, handle: str = "unknown") -> dict:
+    settings = get_settings()
+    model = persona.get("model_config", {}).get("model") or settings.ollama_model
+
+    if not settings.ollama_api_key:
+        return await _fallback_with_reason(context, persona, model, "no_api_key")
+
+    # Circuit-breaker: if the daily token budget is spent, don't call the LLM.
+    tripped, why = await budget.over_budget(handle)
+    if tripped:
+        return await _fallback_with_reason(context, persona, model, why)
+
+    try:
+        from openai import APIError, APITimeoutError
+
+        async with _semaphore():
+            resp = await _get_client().chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": _system_prompt(persona)},
+                    {"role": "user", "content": json.dumps(context, default=str)},
+                ],
+                tools=TOOLS,
+                tool_choice="auto",
+                temperature=persona.get("model_config", {}).get("temperature", 0.4),
+                max_tokens=1536,
+            )
+    except (APITimeoutError, APIError) as e:  # expected infra failure -> fall back
+        log.warning("Ollama Cloud call failed (%s); using fallback manager", e)
+        return await _fallback_with_reason(context, persona, model, "api_error")
+    except Exception as e:  # noqa: BLE001 — a code bug: fall back but LOUD (stack trace)
+        log.error("LLM manage() unexpected error; using fallback manager", exc_info=True)
+        return await _fallback_with_reason(context, persona, model, "unexpected_error")
+
+    choice = resp.choices[0]
+    message = choice.message
+    if getattr(choice, "finish_reason", None) == "length":
+        # Truncated: a mid-JSON tool call would be silently dropped. Flag it.
+        log.warning("LLM response truncated (finish_reason=length) for %s/%s; "
+                    "some tool calls may be lost — consider raising max_tokens", handle, model)
+    parsed = _parse_tool_calls(message)
+    usage = getattr(resp, "usage", None)
+    tokens_in = getattr(usage, "prompt_tokens", 0) or 0
+    tokens_out = getattr(usage, "completion_tokens", 0) or 0
+    await budget.record_usage(handle, tokens_in, tokens_out)
+    return {
+        "actions": parsed["actions"],
+        "narration": parsed["narration"] or (message.content or "")[:500],
+        "posts": parsed["posts"],
+        "model": model,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "cost_usd": budget.estimate_cost_usd(tokens_in, tokens_out),
+    }
