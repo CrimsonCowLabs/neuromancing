@@ -1,0 +1,8 @@
+# Legacy house strategy — kept byte-identical (name + spec) so the ROSTER and
+# existing tests are unaffected. signal_fn implementation lives in library.py.
+name: SMA 10/30 Crossover
+kind: signal_fn
+spec:
+  fn: sma_crossover
+  fast: 10
+  slow: 30
