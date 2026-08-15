@@ -1,0 +1,186 @@
+"""Shared, validated schema + vocabulary for the `indicator_dsl` strategy kind.
+
+This is the single source of truth for the strategy grammar, used by BOTH services:
+- trade-api validates specs on create/backtest and evaluates them.
+- game-api's deep-agent (TODO #3) emits candidate strategies as structured Pydantic
+  output and validates them here before backtesting.
+
+A strategy is: named **indicators** (each with an OHLCV `source` and its own
+`timeframe`), named **states** (a level/zone or a crossing condition), and
+`buy_when`/`exit_when` **rule groups** (nestable all/any/not over state names or
+inline conditions), plus an optional `strength` map and a `type` archetype.
+
+`validate_spec(dict)` is the fail-closed gate: it rejects unknown fns/ops/sources/
+fields, dangling references, bad params, and out-of-range timeframes, and returns the
+canonical dict. NO code execution — only whitelisted names.
+
+The vocabulary constants below are the canonical grammar; trade-api's `indicators.py`
+imports them so its fn *implementations* can never drift from the grammar.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, model_validator
+
+# --- Vocabulary (the grammar contract) ------------------------------------
+SOURCES = ("close", "open", "high", "low", "hlc3", "volume")
+KNOWN_FNS = ("sma", "ema", "rsi", "roc", "macd", "bollinger", "bbpercent", "atr", "vwap")
+# fn -> valid `field` selectors for its dict-valued output
+DICT_FIELDS = {
+    "macd": ("line", "signal", "hist"),
+    "bollinger": ("upper", "middle", "lower", "percent"),
+}
+# Must track neuromancing_shared PRICE_TIMEFRAMES (kept literal so this stays
+# pure/offline-testable).
+ALLOWED_TIMEFRAMES = ("1m", "5m", "1h", "1d")
+OPS = ("<", "<=", ">", ">=", "==", "!=")
+CROSS = ("above", "below")
+ARCHETYPES = ("trend", "mean_reversion", "momentum", "breakout", "trend_pullback", "custom")
+
+
+class IndicatorSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    fn: str
+    source: str = "close"
+    timeframe: str | None = None
+    period: int | None = None
+    fast: int | None = None
+    slow: int | None = None
+    signal: int | None = None
+    mult: float | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> IndicatorSpec:
+        if self.fn not in KNOWN_FNS:
+            raise ValueError(f"unknown indicator fn: {self.fn}")
+        if self.source not in SOURCES:
+            raise ValueError(f"unknown source: {self.source}")
+        if self.timeframe is not None and self.timeframe not in ALLOWED_TIMEFRAMES:
+            raise ValueError(f"timeframe {self.timeframe} not in {ALLOWED_TIMEFRAMES}")
+        for p in ("period", "fast", "slow", "signal"):
+            v = getattr(self, p)
+            if v is not None and v <= 0:
+                raise ValueError(f"{self.id}.{p} must be positive")
+        if self.fn == "macd" and self.fast and self.slow and self.fast >= self.slow:
+            raise ValueError(f"{self.id}: macd fast must be < slow")
+        if self.fn in ("sma", "ema", "roc") and not self.period:
+            raise ValueError(f"{self.id}: {self.fn} requires a period")
+        return self
+
+
+def _is_group(node: Any) -> bool:
+    return isinstance(node, dict) and any(k in node for k in ("all", "any", "not"))
+
+
+class StrategySpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: str | None = None
+    base_timeframe: str | None = None
+    indicators: list[IndicatorSpec]
+    states: dict[str, dict] = {}
+    buy_when: dict | None = None
+    exit_when: dict | None = None
+    strength: dict | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> StrategySpec:
+        ids = [i.id for i in self.indicators]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate indicator id")
+        if not ids:
+            raise ValueError("at least one indicator required")
+        by_id = {i.id: i for i in self.indicators}
+        if self.type is not None and self.type not in ARCHETYPES:
+            raise ValueError(f"unknown type: {self.type}")
+        if self.base_timeframe and self.base_timeframe not in ALLOWED_TIMEFRAMES:
+            raise ValueError(f"base_timeframe not in {ALLOWED_TIMEFRAMES}")
+
+        def check_cond(cond: dict) -> None:
+            if not isinstance(cond, dict) or "indicator" not in cond:
+                raise ValueError(f"condition needs an 'indicator': {cond}")
+            iid = cond["indicator"]
+            if iid not in by_id:
+                raise ValueError(f"condition references unknown indicator: {iid}")
+            fn = by_id[iid].fn
+            field = cond.get("field")
+            if fn in DICT_FIELDS:
+                if field not in DICT_FIELDS[fn]:
+                    raise ValueError(f"{iid} ({fn}) needs field in {DICT_FIELDS[fn]}, got {field}")
+            elif field is not None:
+                raise ValueError(f"{iid} ({fn}) is scalar; no 'field' allowed")
+            has_op, has_cross = "op" in cond, "cross" in cond
+            if has_op == has_cross:
+                raise ValueError(f"condition needs exactly one of op/cross: {cond}")
+            if has_op and cond["op"] not in OPS:
+                raise ValueError(f"unknown op: {cond['op']}")
+            if has_cross and cond["cross"] not in CROSS:
+                raise ValueError(f"unknown cross: {cond['cross']}")
+            has_val, has_other = "value" in cond, "other" in cond
+            if has_val == has_other:
+                raise ValueError(f"condition needs exactly one of value/other: {cond}")
+            if has_other:
+                other = cond["other"]
+                if other not in by_id:
+                    raise ValueError(f"condition references unknown indicator: {other}")
+                ofn = by_id[other].fn
+                ofield = cond.get("other_field")
+                if ofn in DICT_FIELDS and ofield not in DICT_FIELDS[ofn]:
+                    raise ValueError(f"other {other} needs other_field in {DICT_FIELDS[ofn]}")
+            allowed = {"indicator", "field", "op", "cross", "value", "other", "other_field"}
+            extra = set(cond) - allowed
+            if extra:
+                raise ValueError(f"unknown condition keys: {extra}")
+
+        for name, cond in self.states.items():
+            check_cond(cond)
+
+        def check_group(node: Any) -> None:
+            if isinstance(node, str):
+                if node not in self.states:
+                    raise ValueError(f"rule references unknown state: {node}")
+                return
+            if not isinstance(node, dict):
+                raise ValueError(f"rule node must be a state name or dict: {node}")
+            if _is_group(node):
+                keys = [k for k in ("all", "any", "not") if k in node]
+                if len(keys) != 1 or len(node) != 1:
+                    raise ValueError(f"group must have exactly one of all/any/not: {node}")
+                key = keys[0]
+                if key == "not":
+                    check_group(node["not"])
+                else:
+                    items = node[key]
+                    if not isinstance(items, list) or not items:
+                        raise ValueError(f"'{key}' must be a non-empty list")
+                    for it in items:
+                        check_group(it)
+            else:
+                check_cond(node)  # inline condition
+
+        if not self.buy_when and not self.exit_when:
+            raise ValueError("strategy needs buy_when and/or exit_when")
+        if self.buy_when:
+            check_group(self.buy_when)
+        if self.exit_when:
+            check_group(self.exit_when)
+
+        if self.strength is not None:
+            for side, sp in self.strength.items():
+                if side not in ("buy", "exit"):
+                    raise ValueError(f"strength side must be buy/exit: {side}")
+                if not isinstance(sp, dict) or sp.get("from") not in by_id:
+                    raise ValueError(f"strength.{side}.from must reference an indicator")
+                mp = sp.get("map")
+                if not (isinstance(mp, (list, tuple)) and len(mp) == 2):
+                    raise ValueError(f"strength.{side}.map must be [a, b]")
+        return self
+
+
+def validate_spec(spec: dict) -> dict:
+    """Validate an indicator_dsl spec dict; return the canonical dict to store.
+    Raises ValueError (fail-closed) on any problem."""
+    model = StrategySpec.model_validate(spec)
+    return model.model_dump(exclude_none=True)
