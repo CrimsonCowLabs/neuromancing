@@ -1,0 +1,6 @@
+name: 20-bar Momentum
+kind: signal_fn
+spec:
+  fn: momentum
+  lookback: 20
+  threshold: 0.03

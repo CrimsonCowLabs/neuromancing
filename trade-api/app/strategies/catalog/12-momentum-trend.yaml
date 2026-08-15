@@ -1,0 +1,21 @@
+# Showcase: 5m momentum thrust, trend-filtered by the 1h MACD line and gated by a
+# volatility floor (ATR > 0). Exercises macd (multi-tf, line field), roc (crossing),
+# and atr in one strategy.
+name: Momentum Breakout (Trend-Filtered)
+kind: indicator_dsl
+spec:
+  type: momentum
+  base_timeframe: 5m
+  indicators:
+    - {id: trend, fn: macd, fast: 12, slow: 26, signal: 9, source: close, timeframe: 1h}
+    - {id: mom, fn: roc, period: 20, source: close, timeframe: 5m}
+    - {id: vol, fn: atr, period: 14, timeframe: 5m}
+  states:
+    uptrend: {indicator: trend, field: line, op: ">", value: 0}
+    thrust: {indicator: mom, cross: above, value: 0.02}
+    liquid: {indicator: vol, op: ">", value: 0}
+  buy_when:
+    all: [uptrend, thrust, liquid]
+  exit_when:
+    any:
+      - {indicator: mom, op: "<", value: -0.02}

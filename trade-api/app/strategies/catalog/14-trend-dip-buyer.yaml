@@ -1,0 +1,22 @@
+# Trend-pullback showcase (fits dip-buyer-dana). Buy a 5m RSI reclaim off oversold
+# ONLY while the 1h trend is up (fast SMA over slow SMA); exit when RSI runs hot.
+# Distinct multi-timeframe shape from the MACD showcase (SMA trend + RSI reclaim).
+name: Trend Dip Buyer
+kind: indicator_dsl
+spec:
+  type: trend_pullback
+  base_timeframe: 5m
+  indicators:
+    - {id: t_fast, fn: sma, period: 20, source: close, timeframe: 1h}
+    - {id: t_slow, fn: sma, period: 50, source: close, timeframe: 1h}
+    - {id: rsi14, fn: rsi, period: 14, source: close, timeframe: 5m}
+  states:
+    uptrend: {indicator: t_fast, op: ">", other: t_slow}
+    reclaim: {indicator: rsi14, cross: above, value: 35}
+  buy_when:
+    all: [uptrend, reclaim]
+  exit_when:
+    any:
+      - {indicator: rsi14, op: ">", value: 65}
+  strength:
+    buy: {from: rsi14, map: [35, 20]}

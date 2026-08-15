@@ -1,0 +1,10 @@
+# Legacy rule_dsl house strategy — spec kept byte-identical.
+name: RSI-DSL Dip Buyer
+kind: rule_dsl
+spec:
+  buy_when:
+    all:
+      - {indicator: rsi, period: 14, op: "<", value: 35}
+  exit_when:
+    any:
+      - {indicator: rsi, period: 14, op: ">", value: 65}

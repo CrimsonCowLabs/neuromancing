@@ -1,0 +1,7 @@
+name: RSI Mean Reversion
+kind: signal_fn
+spec:
+  fn: rsi_reversion
+  period: 14
+  low: 30
+  high: 70

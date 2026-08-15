@@ -1,0 +1,23 @@
+# Showcase: multi-timeframe indicator_dsl. 1h MACD trend filter gates a 5m RSI
+# pullback-and-reclaim entry. Demonstrates per-indicator timeframes, dict-valued
+# indicator fields (macd.hist), a crossing state, and a conviction map.
+name: MACD Trend + RSI Pullback
+kind: indicator_dsl
+spec:
+  type: trend_pullback
+  base_timeframe: 5m
+  indicators:
+    - {id: trend, fn: macd, fast: 12, slow: 26, signal: 9, source: close, timeframe: 1h}
+    - {id: rsi14, fn: rsi, period: 14, source: close, timeframe: 5m}
+    - {id: bbpct, fn: bbpercent, period: 20, mult: 2.0, source: close, timeframe: 5m}
+  states:
+    uptrend: {indicator: trend, field: hist, op: ">", value: 0}
+    reclaim: {indicator: rsi14, cross: above, value: 40}
+  buy_when:
+    all: [uptrend, reclaim]
+  exit_when:
+    any:
+      - {indicator: bbpct, op: ">", value: 1.0}
+      - {indicator: rsi14, op: ">", value: 70}
+  strength:
+    buy: {from: rsi14, map: [40, 20]}
