@@ -1,0 +1,49 @@
+[project]
+name = "neuromancing-game-api"
+version = "0.1.0"
+description = "Neuromancing game/orchestration: agents, personas, Temporal loop, market-ingest, public API, SSE"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "asyncpg>=0.29",
+    "psycopg[binary]>=3.2",
+    "alembic>=1.13",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "redis>=5.0",
+    "httpx>=0.27",
+    "sse-starlette>=2.1",
+    "temporalio>=1.7",
+    "openai>=1.40",
+    "alpaca-py>=0.28",
+    "neuromancing-shared",
+    # Deep agents (TODO #3): LangGraph reasoning graph + Ollama-Cloud via langchain-openai.
+    "langgraph>=0.2.60",
+    "langchain-core>=0.3.25",
+    "langchain-openai>=0.2.14",
+    "langgraph-checkpoint-postgres>=2.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "fakeredis>=2.23",
+    "ruff>=0.5",
+]
+
+[tool.uv.sources]
+neuromancing-shared = { path = "../shared" }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

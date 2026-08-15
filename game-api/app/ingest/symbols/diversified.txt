@@ -1,0 +1,176 @@
+# Diversified ~150-symbol equity universe for Neuromancing (TODO #4a).
+# Sector-balanced large/mid-cap US equities + a few broad ETFs.
+# One symbol per line; blank lines and '#' comments ignored.
+# The active universe is selected by PRICE_UNIVERSE (default: diversified).
+# For #4b, swap PRICE_UNIVERSE=russell1000.
+
+# --- Information Technology ---
+AAPL
+MSFT
+NVDA
+AVGO
+ORCL
+CRM
+ADBE
+AMD
+CSCO
+ACN
+INTC
+IBM
+TXN
+QCOM
+NOW
+INTU
+AMAT
+MU
+
+# --- Communication Services ---
+GOOGL
+META
+NFLX
+DIS
+CMCSA
+VZ
+T
+TMUS
+CHTR
+EA
+TTWO
+WBD
+OMC
+
+# --- Consumer Discretionary ---
+AMZN
+TSLA
+HD
+MCD
+NKE
+LOW
+SBUX
+TJX
+BKNG
+GM
+F
+MAR
+CMG
+ORLY
+YUM
+
+# --- Consumer Staples ---
+WMT
+PG
+KO
+PEP
+COST
+MDLZ
+CL
+MO
+PM
+TGT
+KMB
+GIS
+SYY
+KHC
+
+# --- Financials ---
+JPM
+BAC
+WFC
+GS
+MS
+C
+SCHW
+AXP
+BLK
+SPGI
+CB
+PGR
+USB
+PNC
+COF
+
+# --- Health Care ---
+UNH
+JNJ
+LLY
+MRK
+ABBV
+PFE
+TMO
+ABT
+DHR
+BMY
+AMGN
+MDT
+CVS
+ISRG
+GILD
+
+# --- Industrials ---
+CAT
+BA
+HON
+UNP
+GE
+RTX
+LMT
+DE
+UPS
+FDX
+MMM
+EMR
+ETN
+CSX
+NSC
+
+# --- Energy ---
+XOM
+CVX
+COP
+SLB
+EOG
+MPC
+PSX
+VLO
+OXY
+WMB
+KMI
+HAL
+
+# --- Materials ---
+LIN
+APD
+SHW
+FCX
+NEM
+ECL
+DOW
+NUE
+DD
+
+# --- Utilities ---
+NEE
+DUK
+SO
+D
+AEP
+EXC
+SRE
+XEL
+PEG
+
+# --- Real Estate ---
+PLD
+AMT
+EQIX
+CCI
+PSA
+O
+SPG
+WELL
+
+# --- Broad-market ETFs ---
+SPY
+QQQ
+IWM
+DIA
