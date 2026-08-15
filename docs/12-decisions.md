@@ -6,7 +6,7 @@ An ADR-style record of the non-obvious choices in Neuromancing and the reasoning
 
 ### D1 · Deterministic strategies generate signals; the LLM only manages
 
-**Why.** The strategies are the *sellable core* — they must be reproducible and backtestable, which an LLM is not. Making the LLM the *manager* (sizing, skip/close, risk, persona commentary) rather than the *signal source* gives shareable AI personalities while keeping correctness deterministic. Two agents can run the same strategy and differ only by persona.
+**Why.** The strategies are the deterministic core — they must be reproducible and backtestable, which an LLM is not. Making the LLM the *manager* (sizing, skip/close, risk, persona commentary) rather than the *signal source* gives shareable AI personalities while keeping correctness deterministic. Two agents can run the same strategy and differ only by persona.
 **Consequence.** A guardrail (D8) mechanically enforces "buy must be backed by a current signal," so the model can't invent trades even if it tries. See [07](07-agent-brain.md).
 
 ### D2 · Temporal for orchestration (not arq/Celery)
@@ -16,7 +16,7 @@ An ADR-style record of the non-obvious choices in Neuromancing and the reasoning
 
 ### D3 · Internal simulation engine + a pluggable Broker seam
 
-**Why.** A game needs *many* agents. Real brokerage accounts (Alpaca's Trading API caps at 3 paper + 1 live) don't scale and carry regulatory overhead. So we fill simulated orders against **real Alpaca prices** through a `Broker` interface whose `SimBroker` implementation can later be swapped for an `AlpacaBroker` — without game-api changing. Unlimited agents, no per-account cost, and a clean path to real money. See [05](05-trading-system.md), [13](13-roadmap.md).
+**Why.** A game needs *many* agents. Real brokerage accounts (Alpaca's Trading API caps at 3 paper + 1 live) don't scale and carry regulatory overhead. So we fill simulated orders against **real Alpaca prices** through a `Broker` interface whose `SimBroker` implementation can later be swapped for an `AlpacaBroker` — without game-api changing. Unlimited agents, no per-account cost, and a clean path to a real brokerage adapter later. See [05](05-trading-system.md).
 
 ### D4 · Ollama Cloud via the OpenAI-compatible endpoint, never Anthropic
 
@@ -25,7 +25,7 @@ An ADR-style record of the non-obvious choices in Neuromancing and the reasoning
 
 ### D5 · SSE, not WebSockets, for realtime
 
-**Why.** The spectator UI is server→client only (leaderboard, trade feed, Chirp). SSE is one-directional, auto-reconnecting, CDN-friendlier, and lets each web process hold **one Redis subscription for all clients** instead of per-client sockets. WebSockets are reserved for the later interactive/real-money phase. See [09](09-realtime.md).
+**Why.** The spectator UI is server→client only (leaderboard, trade feed, Chirp). SSE is one-directional, auto-reconnecting, CDN-friendlier, and lets each web process hold **one Redis subscription for all clients** instead of per-client sockets. WebSockets are reserved for a later interactive phase. See [09](09-realtime.md).
 
 ### D6 · Decimal everywhere; NUMERIC in Postgres, never float
 

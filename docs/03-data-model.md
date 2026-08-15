@@ -109,7 +109,7 @@ Source: `trade-api/app/models/entities.py`.
 
 **`strategy`** — a deterministic strategy definition; unique on `(name, version)`. `owner_type` (default `house`), `owner_ref`, `kind`, `spec` (JSONB), `version` (default 1), `status` (default `active`), `sandbox_policy` (JSONB nullable).
 
-**`strategy_signal`** — deterministic signal output the LLM management layer acts on, and the audit trail behind marketplace/PDF performance claims. FK `strategy_id`; `agent_ref` (String(64), indexed) is the soft link to a `game.agent`. `ts`, `symbol`, `action` (`SignalAction`), `strength` (`Numeric(6,4)`), `features` (JSONB). Indexes: `ix_signal_agent_ts (agent_ref, ts)`, `ix_signal_strategy_ts (strategy_id, ts)`.
+**`strategy_signal`** — deterministic signal output the LLM management layer acts on, and the reproducible audit trail behind each strategy's track record. FK `strategy_id`; `agent_ref` (String(64), indexed) is the soft link to a `game.agent`. `ts`, `symbol`, `action` (`SignalAction`), `strength` (`Numeric(6,4)`), `features` (JSONB). Indexes: `ix_signal_agent_ts (agent_ref, ts)`, `ix_signal_strategy_ts (strategy_id, ts)`.
 
 ```mermaid
 erDiagram
@@ -190,7 +190,7 @@ erDiagram
 
 ## `game` schema
 
-Source: `game-api/app/models/entities.py`. Phase-2+ tables (`user`, `subscription`, `purchase`, `copy_link`) are intentionally out of the MVP model.
+Source: `game-api/app/models/entities.py`.
 
 ### Enums
 
