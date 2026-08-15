@@ -21,15 +21,42 @@ log = logging.getLogger("neuromancing.seed")
 
 STARTING_CASH = 100_000.0
 
-# Per-agent tradable universes are *curated subsets* of the ~150-symbol ingest
-# universe (ingest fetches prices for all of it; each persona trades a coherent
-# handful). Sector-diverse baskets keep the personas distinct and the LLM context
-# small. All tickers below are members of ingest/symbols/diversified.txt.
-_MOMENTUM = ["NVDA", "AMD", "TSLA", "AVGO", "META", "QCOM"]
-_DEFENSIVE = ["KO", "PG", "JNJ", "WMT", "XOM", "PFE", "MRK", "VZ"]
-_TREND = ["AAPL", "MSFT", "SPY", "QQQ", "JPM", "CAT", "HON", "GE"]
-_VALUE = ["BAC", "WFC", "CVX", "HD", "LOW", "UNH", "ABBV", "CSCO", "TGT", "F"]
-_DIVERSIFIED = ["AAPL", "JPM", "UNH", "XOM", "CAT", "LIN", "NEE", "PLD", "AMZN", "GOOGL"]
+# Per-agent tradable universes are *curated, persona-themed subsets* of the ingest
+# universe (ingest fetches prices for all of it; each persona trades a coherent slice).
+# The guardrail (agents/guardrails.py) hard-caps trading to these lists, so they set
+# the breadth of each agent's opportunity set. They're ~30 symbols each (widened from
+# the original ~10) — the LLM's per-tick token cost stays bounded because the context
+# only serializes marks for held + signaled symbols, not the whole universe (see
+# agents/llm.py::_llm_view). NOTE: every ticker below is a member of
+# ingest/symbols/diversified.txt, so they price under BOTH PRICE_UNIVERSE=diversified
+# and the russell1000 superset. If you add names outside diversified.txt, make sure
+# the active PRICE_UNIVERSE ingests them or their marks/signals will be missing.
+_MOMENTUM = [  # high-beta growth / semis / momentum leaders
+    "NVDA", "AMD", "TSLA", "AVGO", "META", "QCOM", "MU", "AMAT", "NOW", "INTU",
+    "ADBE", "CRM", "ORCL", "AMZN", "GOOGL", "NFLX", "NKE", "BKNG", "MAR", "CMG",
+    "ISRG", "LLY", "AXP", "GS", "MS", "COF", "GM", "DIS",
+]
+_DEFENSIVE = [  # staples / healthcare / utilities / telecom — low-beta mean reversion
+    "KO", "PG", "JNJ", "WMT", "PFE", "MRK", "VZ", "T", "PEP", "COST", "MDLZ", "CL",
+    "MO", "PM", "KMB", "GIS", "SYY", "KHC", "ABBV", "ABT", "BMY", "AMGN", "MDT",
+    "CVS", "GILD", "DUK", "SO", "D", "AEP", "EXC", "XEL", "PEG", "NEE",
+]
+_TREND = [  # liquid trending large caps + broad ETFs + industrials
+    "AAPL", "MSFT", "SPY", "QQQ", "IWM", "DIA", "JPM", "BAC", "GS", "CAT", "HON",
+    "GE", "UNP", "RTX", "LMT", "DE", "UPS", "FDX", "BA", "ETN", "EMR", "CSX",
+    "NSC", "MMM", "LIN", "XOM", "CVX", "COP", "NEE", "AMT",
+]
+_VALUE = [  # financials / energy / cyclicals / dividend payers — oversold dips
+    "BAC", "WFC", "C", "USB", "PNC", "COF", "CVX", "XOM", "COP", "SLB", "EOG",
+    "MPC", "PSX", "VLO", "OXY", "HD", "LOW", "TGT", "F", "GM", "CVS", "PFE", "MRK",
+    "ABBV", "MO", "PM", "T", "VZ", "KMI", "WMB", "DOW", "DD", "NUE", "FCX",
+]
+_DIVERSIFIED = [  # broad multi-sector spread + ETFs
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "JPM", "BAC", "GS", "UNH",
+    "JNJ", "LLY", "ABBV", "XOM", "CVX", "CAT", "HON", "GE", "LIN", "APD", "NEE",
+    "DUK", "PLD", "AMT", "WMT", "PG", "KO", "COST", "HD", "MCD", "DIS", "VZ",
+    "SPY", "QQQ",
+]
 
 # (handle, display_name, thesis, voice, risk_temperament, [strategy names],
 #  universe, cadence_seconds)
@@ -66,11 +93,31 @@ ROSTER = [
 ]
 
 
+def _reseed_strategy_ids(
+    current_ids: list[int], seed_ids: list[int], owner_type_by_id: dict[int, str]
+) -> list[int]:
+    """Evolution-safe strategy_ids for a reseed of an EXISTING agent.
+
+    If the agent has adopted a self-evolved strategy (owner_type='user', written by
+    the deep-agent evolution loop, TODO #3), its current lineage is preserved
+    untouched — a reseed must never revert an adoption (re-adding the retired house
+    slot would also give it two indicator_dsl strategies and break the evolve gate).
+    Agents that never evolved are refreshed from the seed defaults, so roster/catalog
+    changes still propagate on a plain reseed.
+    """
+    has_evolved = any(owner_type_by_id.get(sid) == "user" for sid in current_ids)
+    return list(current_ids) if has_evolved else list(seed_ids)
+
+
 async def main() -> None:
     trade = TradeClient()
     strategies = await trade.seed_strategies()
     by_name = {s["name"]: s["id"] for s in strategies}
     log.info("seeded %d house strategies", len(strategies))
+    # Full id->owner_type map (incl. user/evolved strategies, which aren't in the
+    # house catalog above) so the update path can preserve adopted evolutions.
+    owner_type_by_id = {s["id"]: s.get("owner_type", "house")
+                        for s in await trade.list_strategies()}
 
     async with SessionLocal() as session:
         for handle, name, thesis, voice, risk, strat_names, universe, cadence in ROSTER:
@@ -103,7 +150,8 @@ async def main() -> None:
                 )
                 session.add(agent)
             else:
-                agent.strategy_ids = strat_ids
+                agent.strategy_ids = _reseed_strategy_ids(
+                    list(agent.strategy_ids or []), strat_ids, owner_type_by_id)
                 agent.tradable_universe = universe
                 agent.decision_cadence_s = cadence
         await session.commit()
