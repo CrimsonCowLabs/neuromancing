@@ -17,6 +17,6 @@ export async function api<T>(path: string, revalidate = 5): Promise<T> {
 export const gameApiBase = BASE;
 
 export type LeaderRow = {
-  rank: number; handle: string; display_name: string;
+  agent_id: number; rank: number; handle: string; display_name: string;
   equity: number; starting_equity: number; return_pct: number;
 };

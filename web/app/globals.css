@@ -84,3 +84,67 @@ tr:hover td { background: var(--panel-2); }
 .pgbtn:disabled { opacity: 0.4; cursor: default; }
 .live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); margin-right: 6px; animation: pulse 1.6s infinite; }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Home landing — "nocturne" cyberpunk theme, scoped to .nm-home so the rest
+   of the app keeps its own palette. Tokens + .btn from the Claude Design
+   nocturne system (imported design: "Agentic trader leaderboard").
+   ────────────────────────────────────────────────────────────────────────── */
+.nm-home {
+  --color-bg: #161826; --color-surface: #232532; --color-text: #e9e9ed;
+  --color-accent: #9184d9;
+  --color-neutral-300: #cfd3e5; --color-neutral-400: #b2b6ca; --color-neutral-500: #9397ab;
+  /* 600/700 nudged lighter than the source system for WCAG-AA contrast at the
+     10–11px sizes this page uses them (handles, meta, the legal disclaimer). */
+  --color-neutral-600: #878ca1; --color-neutral-700: #6d7284;
+  --color-accent-200: #e7e5fe; --color-accent-300: #d2cefd; --color-accent-400: #b5abfc;
+  --color-accent-500: #968ae0; --color-accent-600: #796cbf; --color-accent-700: #5d5294;
+  --color-accent-800: #423a6a; --color-accent-900: #2b2741;
+  font-family: ui-monospace, Menlo, monospace;
+  /* `clip` (not `hidden`) contains horizontal overflow WITHOUT making .nm-home a
+     scroll container — `hidden` would, which breaks the descendant sticky nav. */
+  min-height: 100vh; overflow-x: clip;
+  background: color-mix(in srgb, #161826 50%, black);
+  color: var(--color-text);
+}
+.nm-home a { color: var(--color-accent-300); text-decoration: none; }
+.nm-home a:hover { color: var(--color-accent-200); }
+.nm-home .btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer;
+  font-family: inherit; font-weight: 600; font-size: 14px; line-height: 1.2; color: var(--color-text);
+  background: transparent; border: 1px solid transparent; padding: 8px 14px; border-radius: 8px;
+}
+.nm-home .btn-primary { color: var(--color-accent); border-color: var(--color-accent); }
+.nm-home .btn-primary:hover { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+.nm-home .btn-primary:active { background: color-mix(in srgb, var(--color-accent) 22%, transparent); }
+
+@keyframes nm-blink { 0%,55% { opacity: 1; } 56%,100% { opacity: 0; } }
+@keyframes nm-pulse { 0%,100% { opacity: .5; } 50% { opacity: 1; } }
+/* Reveal-on-scroll is a PROGRESSIVE ENHANCEMENT: the hidden pre-reveal state only
+   applies when JS is present (html.js, set before paint in layout). Without JS the
+   content is fully visible — no blank page for crawlers or on a hydration failure. */
+html.js .nm-home [data-rv] { opacity: 0; transform: translateY(26px);
+  transition: opacity .9s cubic-bezier(.2,.7,.2,1), transform .9s cubic-bezier(.2,.7,.2,1); }
+html.js .nm-home [data-rv="l"] { transform: translateX(-36px); }
+html.js .nm-home [data-rv="r"] { transform: translateX(36px); }
+html.js .nm-home [data-rv="rise"] { transform: scaleY(0); transform-origin: bottom; transition-duration: 1.2s; }
+html.js .nm-home [data-rv][data-in="1"] { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  html.js .nm-home [data-rv] { opacity: 1; transform: none; transition: none; }
+  /* Stop the infinite decorative loops (cursor blink, pulse dot) too. */
+  .nm-home *, .nm-home *::before, .nm-home *::after { animation: none !important; }
+}
+
+/* Responsive containers (inline grid-template-columns can't be overridden by
+   media queries, so the stacking layouts live in classes). */
+.nm-2col { display: grid; grid-template-columns: 1.55fr 1fr; gap: 24px; padding-bottom: 56px; }
+.nm-lore { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+@media (max-width: 860px) {
+  .nm-2col { grid-template-columns: 1fr; }
+  .nm-2col .nm-comm { border-left: none !important; padding-left: 0 !important; }
+  .nm-lore { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 520px) { .nm-lore { grid-template-columns: 1fr; } }
+.nm-home .nm-lb-row { transition: border-color .2s; }
+.nm-home .nm-lb-row:hover { border-color: var(--color-accent-500) !important; }
+.nm-home .nm-term-row:hover { background: rgba(150,138,224,.07) !important; }
