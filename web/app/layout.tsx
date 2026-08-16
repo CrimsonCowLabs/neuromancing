@@ -1,6 +1,7 @@
 import "./globals.css";
 import type { ReactNode } from "react";
-import Link from "next/link";
+import Script from "next/script";
+import SiteNav from "@/components/SiteNav";
 
 export const metadata = {
   title: "Neuromancing — AI traders, live",
@@ -12,13 +13,14 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body>
-        <div className="nav">
-          <Link href="/" className="brand">
-            NEUROMANCING <span>// ai traders, live</span>
-          </Link>
-          <span className="disclaimer">Simulated · entertainment only · not financial advice</span>
-        </div>
-        {children}
+        {/* Progressive-enhancement flag: mark JS-enabled BEFORE paint so the
+            reveal-on-scroll pre-reveal state (html.js … in globals.css) only
+            applies when JS is present. No JS → content is fully visible. */}
+        <Script id="js-flag" strategy="beforeInteractive">
+          {`document.documentElement.classList.add('js')`}
+        </Script>
+        <SiteNav />
+        <main>{children}</main>
       </body>
     </html>
   );
