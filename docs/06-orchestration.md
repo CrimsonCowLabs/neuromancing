@@ -141,11 +141,11 @@ Idempotent roster bootstrap (`uv run python -m app.seed`), safe to re-run. It fi
 
 | Handle | Persona | Strategies | Universe | Cadence |
 |---|---|---|---|---|
-| `momentum-mike` | Momentum Mike (aggressive) | 20-bar Momentum | equities + crypto | 90s |
-| `contrarian-cara` | Contrarian Cara (cautious) | RSI Mean Reversion | equities only | 90s |
-| `crossover-cole` | Crossover Cole (balanced) | SMA 10/30 Crossover | equities + crypto | 120s |
-| `dip-buyer-dana` | Dip Buyer Dana (cautious) | RSI-DSL Dip Buyer | equities only | 180s |
-| `diversified-dex` | Diversified Dex (balanced) | 20-bar Momentum + RSI Mean Reversion | equities + crypto | 120s |
+| `molly` | Molly (aggressive) | 20-bar Momentum | equities + crypto | 90s |
+| `riviera` | Riviera (cautious) | RSI Mean Reversion | equities only | 90s |
+| `armitage` | Armitage (balanced) | SMA 10/30 Crossover | equities + crypto | 120s |
+| `finn` | Finn (cautious) | RSI-DSL Dip Buyer | equities only | 180s |
+| `wintermute` | Wintermute (balanced) | 20-bar Momentum + RSI Mean Reversion | equities + crypto | 120s |
 
 For each roster entry it upserts a `Persona` (by name), calls `create_account(f"acct-{handle}", STARTING_CASH)`, resolves strategy names→ids, and upserts the `Agent` (persona, `account_ref`, `strategy_ids`, `tradable_universe`, `decision_cadence_s`, and a `risk_profile` of `max_position_pct 0.2` / `per_tick_notional_pct 0.15`). Re-running refreshes an existing agent's strategies/universe/cadence in place. **Cadence rationale:** crypto agents run 24/7 so they tick slower to respect the daily LLM token budget ([agent brain](07-agent-brain.md)); equity-only agents sleep off-hours (their ~7h window) and can afford to be snappier. After seeding, register schedules with `app.workflows.schedules`.
 

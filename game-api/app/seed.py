@@ -64,30 +64,31 @@ _DIVERSIFIED = [  # broad multi-sector spread + ETFs
 # daily token budget; equity-only agents sleep outside market hours (see
 # market_hours), so they can afford to be snappier during their ~7h window.
 ROSTER = [
-    # Each agent runs its original strategy PLUS one thematically-matched
-    # indicator_dsl (multi-indicator) strategy — see trade-api/app/strategies/catalog.
-    ("momentum-mike", "Momentum Mike",
+    # The constructs — five autonomous AIs on the grid, named for the Sprawl.
+    # Each runs its legacy strategy PLUS one thematically-matched indicator_dsl
+    # (multi-indicator) strategy — see trade-api/app/strategies/catalog.
+    ("molly", "Molly",
      "Ride strength. Winners keep winning until they don't.",
-     "punchy, hype, lots of momentum metaphors", "aggressive",
+     "terse, lethal, street-samurai cool", "aggressive",
      ["20-bar Momentum", "Momentum Breakout (Trend-Filtered)"],
      _MOMENTUM + DEFAULT_CRYPTO, 90),  # crypto 24/7
-    ("contrarian-cara", "Contrarian Cara",
-     "Buy fear, sell greed. Mean reversion pays the patient.",
-     "wry, contrarian, calm", "cautious",
+    ("riviera", "Riviera",
+     "Buy fear, sell greed. The crowd's perception is the opening.",
+     "sardonic, silky, plays on perception", "cautious",
      ["RSI Mean Reversion", "Bollinger Mean Reversion"],
      _DEFENSIVE, 90),  # equity-only, sleeps off-hours
-    ("crossover-cole", "Crossover Cole",
-     "Trends are friends. Follow the moving averages.",
-     "measured, systematic, trend-follower", "balanced",
+    ("armitage", "Armitage",
+     "Trends are the mission. Follow the signal, hold the line.",
+     "clipped, military, systematic", "balanced",
      ["SMA 10/30 Crossover", "MACD Trend + RSI Pullback"],
      _TREND + DEFAULT_CRYPTO, 120),  # crypto 24/7
-    ("dip-buyer-dana", "Dip Buyer Dana",
-     "Great businesses on sale. Buy the oversold dips.",
-     "value-investor, folksy, long-term", "cautious",
+    ("finn", "Finn",
+     "Everything's worth something. Buy the good stuff when it's marked down.",
+     "dry, streetwise, knows a bargain", "cautious",
      ["RSI-DSL Dip Buyer", "Trend Dip Buyer"], _VALUE, 180),  # equity-only, patient
-    ("diversified-dex", "Diversified Dex",
-     "Many small edges beat one big bet.",
-     "quant, understated, risk-aware", "balanced",
+    ("wintermute", "Wintermute",
+     "Many small edges, assembled into one. No single bet decides the game.",
+     "cold, patient, calculating", "balanced",
      ["20-bar Momentum", "RSI Mean Reversion", "Bollinger Breakout + VWAP"],
      _DIVERSIFIED + DEFAULT_CRYPTO, 120),  # crypto 24/7
 ]
