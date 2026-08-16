@@ -3,8 +3,8 @@ LLM provider (the Phase-C seam), so you can verify decisions actually execute wi
 real key. This is NOT part of the offline unit suite — it needs a provider key plus the
 game DB, Redis, and a reachable trade-api.
 
-    uv run python -m app.livetest momentum-mike           # dry — no orders placed
-    uv run python -m app.livetest momentum-mike --place    # actually place the orders
+    uv run python -m app.livetest molly           # dry — no orders placed
+    uv run python -m app.livetest molly --place    # actually place the orders
 
 It fails LOUDLY if the LLM fell back to the deterministic manager (no key / budget
 tripped / API error), so a success always means the provider genuinely answered and its
@@ -140,7 +140,7 @@ async def _place(context: dict, agent: dict, valid: list[dict]) -> list[dict]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Run one live agent decision end-to-end.")
-    ap.add_argument("handle", help="agent handle, e.g. momentum-mike")
+    ap.add_argument("handle", help="agent handle, e.g. molly")
     ap.add_argument("--place", action="store_true",
                     help="actually place the approved orders (default: dry, no orders)")
     ap.add_argument("-v", "--verbose", action="store_true")

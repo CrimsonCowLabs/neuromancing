@@ -17,6 +17,7 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 def _agent_public(agent: Agent) -> dict:
     return {
+        "id": agent.id,
         "handle": agent.handle,
         "display_name": agent.display_name,
         "status": agent.status.value,
@@ -40,6 +41,16 @@ async def list_agents(session: AsyncSession = Depends(get_session)) -> list[dict
         out.append(row)
     out.sort(key=lambda r: (r["rank"] is None, r.get("rank") or 1e9))
     return out
+
+
+@router.get("/by-id/{agent_id}")
+async def get_agent_by_id(agent_id: int, session: AsyncSession = Depends(get_session)) -> dict:
+    """Resolve a numeric id → the full profile (which carries `handle`), so the
+    id-keyed construct page can then reuse the handle-keyed sub-resources."""
+    agent = await session.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(404, "construct not found")
+    return await get_agent(agent.handle, session)
 
 
 @router.get("/{handle}")

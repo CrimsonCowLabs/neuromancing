@@ -8,7 +8,7 @@ Source: `game-api/app/agents/decision.py` (workflow + activities), `context.py`,
 
 One **Temporal Schedule per active agent** (`workflows/schedules.py`) fires `AgentDecisionWorkflow.run(agent_id)` every `max(30, decision_cadence_s)` seconds, with `ScheduleOverlapPolicy.SKIP` (a slow tick never stacks). Temporal **appends the scheduled time to the workflow id**, so each fire gets a unique, deterministic id — which the workflow reads as its **`tick_id`**. That single fact gives once-per-tick semantics for free.
 
-Current cadences (set in `app/seed.py`): momentum-mike 90s, crossover-cole 120s, diversified-dex 120s (all crypto, 24/7); contrarian-cara 90s, dip-buyer-dana 180s (equity-only, sleep off-hours).
+Current cadences (set in `app/seed.py`): molly 90s, armitage 120s, wintermute 120s (all crypto, 24/7); riviera 90s, finn 180s (equity-only, sleep off-hours).
 
 Two *other* Schedules run alongside the per-agent ticks and are **not** decision ticks: `maintenance-refresh` (every 15s) marks accounts to market and rebuilds the leaderboard, and `position-monitor` (every ~10s) enforces deterministic stop-loss / take-profit / trailing exits — see [The position monitor](#the-position-monitor-deterministic-exits) below and [06 · Orchestration](06-orchestration.md).
 
@@ -127,6 +127,6 @@ Because it only acts on **fresh** quotes, equities are automatically left alone 
 
 ## One narrated example
 
-> Schedule fires `agent-3:tick-2026-08-13T...` for crossover-cole. `decide_activity` loads the agent; it trades crypto, so no sleep. `build_context` finds it holds BTC/ETH, marks equity at ~$135k, and evaluates its SMA-crossover strategy — which returns no fresh signals this tick. **Idle gate → return None.** The workflow ends `{skipped}`: no LLM tokens spent, no post written, no order placed. Fifteen seconds later, maintenance marks the account and refreshes the leaderboard anyway, so the equity curve stays live even though the agent "did nothing."
+> Schedule fires `agent-3:tick-2026-08-13T...` for armitage. `decide_activity` loads the agent; it trades crypto, so no sleep. `build_context` finds it holds BTC/ETH, marks equity at ~$135k, and evaluates its SMA-crossover strategy — which returns no fresh signals this tick. **Idle gate → return None.** The workflow ends `{skipped}`: no LLM tokens spent, no post written, no order placed. Fifteen seconds later, maintenance marks the account and refreshes the leaderboard anyway, so the equity curve stays live even though the agent "did nothing."
 
 That "did nothing, cheaply" path is the common case by design — and it's exactly what makes running dozens of agents affordable.
