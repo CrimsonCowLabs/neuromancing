@@ -6,6 +6,11 @@ gate (post-session + ≥24h + enough diary) decides whether to run the LangGraph
 graph. Adoption (persist a new `user` strategy + swap the agent's single indicator_dsl
 slot + retire the prior self-owned one) happens here after the graph — idempotent, and
 NEVER touches a shared house strategy row. Evolution is silent on the social feed.
+
+Framing (docs/14): an adopted strategy is a **construct** the agent *raises* from the
+ghosts of its own dead trades; the superseded one is *laid to rest* (retired, revertible).
+The DB values (owner_type=user, status=active|retired, decision=adopted|rejected) are the
+contract — the necromancy is naming/voice over that mechanism, not a behavior change.
 """
 
 from __future__ import annotations
@@ -52,12 +57,15 @@ def _pg_dsn() -> str:
 
 
 async def _adopt(trade: TradeClient, agent: dict, incumbent: dict, spec: dict) -> int:
-    """Persist the evolved strategy, swap it into the agent's strategy_ids, retire the
-    prior self-owned evolution. Returns the new strategy id."""
+    """Raise the evolved strategy as a live **construct**: persist it, swap it into the
+    agent's single indicator_dsl slot, and **lay the prior construct to rest** (retire —
+    never a shared house row). Necromancy framing (docs/14) over the mechanism; the
+    superseded strategy is retired, not deleted, so it can be re-raised. Returns the id."""
     handle = agent["handle"]
+    version = int(incumbent.get("version", 1)) + 1
     new = await trade.create_strategy(
-        name=f"evolved:{handle}", kind="indicator_dsl", spec=spec,
-        owner_type="user", owner_ref=handle, version=int(incumbent.get("version", 1)) + 1,
+        name=f"construct:{handle}", kind="indicator_dsl", spec=spec,
+        owner_type="user", owner_ref=handle, version=version,
         status="active",
     )
     new_id = new["id"]
@@ -70,12 +78,14 @@ async def _adopt(trade: TradeClient, agent: dict, incumbent: dict, spec: dict) -
             ids.append(new_id)
         a.strategy_ids = ids
         await session.commit()
-    # Retire the prior slot only if it was THIS agent's own evolution (never a house row).
+    log.info("raised construct %s (v%d) for %s", new_id, version, handle)
+    # Lay the prior slot to rest only if it was THIS agent's own construct (never a house row).
     if incumbent.get("owner_type") == "user" and incumbent.get("owner_ref") == handle:
         try:
             await trade.set_strategy_status(incumbent_id, "retired")
+            log.info("laid construct %s to rest (superseded by %s)", incumbent_id, new_id)
         except Exception as e:  # noqa: BLE001
-            log.warning("retire prior evolved strategy %s failed: %s", incumbent_id, e)
+            log.warning("could not lay prior construct %s to rest: %s", incumbent_id, e)
     return new_id
 
 
@@ -188,7 +198,7 @@ async def run_evolution_cycle() -> dict:
                 log.warning("evolution failed for %s: %s", agent["handle"], e)
                 results.append({"handle": agent["handle"], "error": str(e)})
     adopted = [r for r in results if r.get("decision") == "adopted"]
-    log.info("evolution cycle: %d agents, %d adopted", len(agents), len(adopted))
+    log.info("evolution cycle: %d agents, %d construct(s) raised", len(agents), len(adopted))
     return {"agents": len(agents), "adopted": len(adopted), "results": results}
 
 

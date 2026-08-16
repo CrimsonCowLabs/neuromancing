@@ -18,6 +18,24 @@ Source: `game-api/app/evolve/` (`workflow, graph, tools, proposal, compile, gate
 memory, budget, llm, diary`), the diary hooks in `agents/decision.py` + `agents/monitor.py`,
 the shared grammar `neuromancing_shared/strategy_spec.py`, and trade-api's ad-hoc backtest.
 
+### A note on the naming — "reanimations" and "constructs"
+
+The UI and logs frame this loop as **necromancy**: an agent *raises* a new strategy from
+the **ghosts of its own dead trades** (the closed [trade diary](#the-trade-diary--the-analysis-substrate)
+episodes the reflect step reads), and if the candidate beats the incumbent out-of-sample it becomes
+a live **construct** — otherwise it's *banished*. A superseded construct is *laid to rest*
+(retired, not deleted, so it can be re-raised). This is voice, not mechanism — the mapping
+is one-to-one and the underlying contract is unchanged:
+
+| Framing | Mechanism |
+|---|---|
+| construct | an adopted, agent-owned evolved strategy (`owner_type=user`, `status=active`) |
+| raise | adopt — swap the candidate into the agent's `indicator_dsl` slot (`decision=adopted`) |
+| banish | reject — the candidate failed the gate (`decision=rejected`) |
+| lay to rest | retire the prior self-owned construct (`status=retired`, revertible) |
+| ghosts | the agent's closed trade-diary episodes the reflect step learns from |
+| Reanimations (panel) | the agent's `strategy_experiment` history |
+
 ## Why it's safe to let an LLM evolve a trader
 
 Three guarantees bound the blast radius, mirroring the project's "deterministic guardrails
