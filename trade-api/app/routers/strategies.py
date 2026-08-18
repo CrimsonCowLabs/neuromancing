@@ -15,11 +15,16 @@ from ..models import (
     StrategySignal,
     StrategyStatus,
 )
+from neuromancing_shared.options_strategy import validate_structure
+
+from ..config import get_settings
 from ..schemas import (
     AdhocBacktestRequest,
     BacktestRequest,
     BacktestResult,
     EvaluateRequest,
+    OptionsBacktestRequest,
+    OptionsBacktestResult,
     SignalOut,
     StrategyCreate,
     StrategyOut,
@@ -32,6 +37,7 @@ from ..strategies.composed import required_timeframes
 from ..strategies.data import load_bars
 from ..strategies.engine import evaluate_multi, list_house_strategies
 from ..strategies.library import SIGNAL_FNS
+from ..strategies.options_backtest import RV_WINDOW, backtest_structure
 from ..strategies.spec import validate_spec
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
@@ -209,6 +215,48 @@ async def backtest_adhoc(
             raise HTTPException(400, "no bars for symbol/window")
         metrics = backtest(body.kind, spec, bars, body.starting_cash)
     return BacktestResult(symbol=body.symbol, **metrics)
+
+
+@router.post("/options-backtest", response_model=OptionsBacktestResult,
+             dependencies=[Depends(require_service_token)])
+async def options_backtest_adhoc(
+    body: OptionsBacktestRequest, session: AsyncSession = Depends(get_session)
+) -> OptionsBacktestResult:
+    """Backtest a defined-risk option structure (v1) over one or more underlyings using the
+    synthetic Black-Scholes chain (backtest-only; nothing is persisted or traded live)."""
+    try:
+        spec = validate_structure(body.structure)
+    except ValueError as e:
+        raise HTTPException(422, f"invalid option structure: {e}")
+    s = get_settings()
+    knobs = dict(r=s.options_risk_free_rate, q=s.options_div_yield, vrp=s.options_vrp_mult,
+                 skew=s.options_skew, term=s.options_term)
+    window = (body.window.start, body.window.end) if body.window else None
+
+    per: list[dict] = []
+    for u in body.underlyings:
+        bars = await load_bars(session, u.upper(), "1d", 5000, window=window)
+        if len(bars) < RV_WINDOW + 5:
+            continue
+        m = backtest_structure(spec, bars, starting_cash=body.starting_cash, **knobs)
+        m["underlying"] = u.upper()
+        per.append(m)
+    if not per:
+        raise HTTPException(400, "no daily bars for any requested underlying")
+
+    tot = sum(p["trades"] for p in per) or 1
+    return OptionsBacktestResult(
+        archetype=spec["archetype"],
+        underlyings=[p["underlying"] for p in per],
+        trades=sum(p["trades"] for p in per),
+        win_rate=round(sum(p["win_rate"] * p["trades"] for p in per) / tot, 4),
+        total_return=round(sum(p["total_return"] for p in per) / len(per), 6),
+        max_drawdown=round(max(p["max_drawdown"] for p in per), 6),
+        avg_credit=round(sum(p["avg_credit"] * p["trades"] for p in per) / tot, 2),
+        avg_return_on_risk=round(sum(p["avg_return_on_risk"] * p["trades"] for p in per) / tot, 4),
+        assignment_rate=round(sum(p["assignment_rate"] * p["trades"] for p in per) / tot, 4),
+        per_underlying=per,
+    )
 
 
 @router.post("/{strategy_id}/backtest", response_model=BacktestResult,
