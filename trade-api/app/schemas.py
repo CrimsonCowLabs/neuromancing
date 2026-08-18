@@ -184,3 +184,25 @@ class BacktestResult(BaseModel):
     total_return: float
     max_drawdown: float
     final_equity: float
+
+
+class OptionsBacktestRequest(BaseModel):
+    """Backtest a defined-risk option structure (v1) over one or more underlyings,
+    WITHOUT persisting. `structure` is validated fail-closed by validate_structure."""
+    structure: dict
+    underlyings: list[str]
+    starting_cash: float = 100_000.0
+    window: BacktestWindow | None = None
+
+
+class OptionsBacktestResult(BaseModel):
+    archetype: str
+    underlyings: list[str]
+    trades: int
+    win_rate: float
+    total_return: float          # mean across underlyings
+    max_drawdown: float          # worst across underlyings
+    avg_credit: float
+    avg_return_on_risk: float
+    assignment_rate: float
+    per_underlying: list[dict]

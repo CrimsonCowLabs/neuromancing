@@ -118,6 +118,23 @@ class TradeClient:
             r.raise_for_status()
             return r.json()
 
+    async def options_backtest_spec(
+        self, structure: dict, underlyings: list[str], *,
+        starting_cash: float = 100000.0, window: tuple | None = None,
+    ) -> dict:
+        """Backtest a defined-risk option structure (v1) over one or more underlyings via
+        the synthetic Black-Scholes chain (backtest-only; nothing persisted or traded)."""
+        body: dict = {"structure": structure, "underlyings": underlyings,
+                      "starting_cash": starting_cash}
+        if window is not None:
+            s, e = window
+            body["window"] = {"start": s.isoformat() if hasattr(s, "isoformat") else s,
+                              "end": e.isoformat() if hasattr(e, "isoformat") else e}
+        async with await self._client() as c:
+            r = await c.post("/strategies/options-backtest", json=body)
+            r.raise_for_status()
+            return r.json()
+
     async def seed_strategies(self) -> list[dict]:
         async with await self._client() as c:
             r = await c.post("/strategies/seed")
