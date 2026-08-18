@@ -25,3 +25,18 @@ class BaseServiceSettings(BaseSettings):
     @property
     def timeframes(self) -> list[str]:
         return [t.strip() for t in self.price_timeframes.split(",") if t.strip()]
+
+    # Options v1 — synthetic Black-Scholes table knobs (see neuromancing_shared/options/).
+    # The vol knobs are the fidelity levers; calibrate against Alpaca IV, don't trust defaults.
+    options_risk_free_rate: float = 0.04
+    options_div_yield: float = 0.0
+    options_vrp_mult: float = 1.15      # implied ≈ realized × this (variance-risk premium)
+    options_skew: float = 0.35          # equity put skew (0 = flat)
+    options_term: float = 0.0           # term-structure slope (0 = flat)
+    options_expiries: str = "7,14,30,45,60"   # DTE ladder for the synthetic chain
+    options_strikes: int = 8            # strikes each side of ATM
+    options_strike_step_pct: float = 0.02     # ~2% spacing between strikes
+
+    @property
+    def options_expiry_ladder(self) -> list[int]:
+        return [int(d.strip()) for d in self.options_expiries.split(",") if d.strip()]
