@@ -27,12 +27,15 @@ class BaseServiceSettings(BaseSettings):
         return [t.strip() for t in self.price_timeframes.split(",") if t.strip()]
 
     # Options v1 — synthetic Black-Scholes table knobs (see neuromancing_shared/options/).
-    # The vol knobs are the fidelity levers; calibrate against Alpaca IV, don't trust defaults.
+    # vrp_mult/skew calibrated to Alpaca indicative IV (2026-08-18, 7 megacaps, 21–45 DTE,
+    # near-money, 3128 contracts) via app.ingest.options_calibrate — re-run to recalibrate.
+    # skew is regime-stable (equity put-skew is persistently steep); vrp is regime-dependent
+    # (this reflects a calm window — near-term IV only ~5% over realized vol).
     options_risk_free_rate: float = 0.04
     options_div_yield: float = 0.0
-    options_vrp_mult: float = 1.15      # implied ≈ realized × this (variance-risk premium)
-    options_skew: float = 0.35          # equity put skew (0 = flat)
-    options_term: float = 0.0           # term-structure slope (0 = flat)
+    options_vrp_mult: float = 1.05      # implied ≈ realized × this (variance-risk premium)
+    options_skew: float = 1.32          # equity put skew (0 = flat)
+    options_term: float = 0.0           # term-structure slope (0 = flat; not fit in v1)
     options_expiries: str = "7,14,30,45,60"   # DTE ladder for the synthetic chain
     options_strikes: int = 8            # strikes each side of ATM
     options_strike_step_pct: float = 0.02     # ~2% spacing between strikes
