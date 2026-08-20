@@ -12,6 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -101,10 +102,12 @@ class StrategyStatus(str, enum.Enum):
 
 
 class SignalAction(str, enum.Enum):
-    buy = "buy"
-    sell = "sell"
+    buy = "buy"      # open/add a long
+    sell = "sell"    # close/reduce a long
     hold = "hold"
-    exit = "exit"
+    exit = "exit"    # close a long (alias of sell for signal grammars)
+    short = "short"  # open/add a short (sell-to-open)
+    cover = "cover"  # close a short (buy-to-close)
 
 
 class Account(Base):
@@ -184,6 +187,9 @@ class Order(Base):
         Enum(OrderSource, name="order_source"), default=OrderSource.agent
     )
     source_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Anti-flip / stale-close safety: a reduce_only order may only reduce a position,
+    # never open or flip one (a close/cover sets it). See engine/portfolio.apply_fill.
+    reduce_only: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     reject_reason: Mapped[str | None] = mapped_column(String(256), nullable=True)
     submitted_at: Mapped[datetime] = _ts()
     filled_at: Mapped[datetime | None] = mapped_column(

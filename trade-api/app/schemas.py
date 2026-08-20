@@ -36,7 +36,10 @@ class OrderCreate(BaseModel):
     client_order_id: str
     source: str = "agent"
     source_ref: str | None = None
-    # Deterministic exit levels (fractions of avg entry), set on a buy.
+    # Anti-flip / stale-close safety: a close or cover sets this so the broker only
+    # ever REDUCES the position (never opens or flips one). Opens leave it false.
+    reduce_only: bool = False
+    # Deterministic exit levels (fractions of avg entry), set on an open (buy or short).
     stop_loss_pct: Decimal | None = None
     take_profit_pct: Decimal | None = None
     trailing_stop_pct: Decimal | None = None
