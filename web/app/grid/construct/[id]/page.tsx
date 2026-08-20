@@ -72,7 +72,9 @@ export default async function ConstructDetail({ params }: { params: Promise<{ id
   const risk = profile.config?.risk_profile ?? {};
   const strategies: any[] = profile.config?.strategies ?? [];
   const universe: string[] = profile.config?.universe ?? [];
-  const positions: any[] = profile.positions ?? [];
+  // Only open positions — a closed position lingers as a qty=0 row in the store; those
+  // carry no information for a "current positions" view and would clutter the table.
+  const positions: any[] = (profile.positions ?? []).filter((p: any) => Number(p.qty) !== 0);
   const chart = equityChart(equity);
   const heroStats = [
     { label: "RETURN", value: fmtRet(profile.return_pct), tone: retTone, glow: `0 0 10px ${retTone}` },
