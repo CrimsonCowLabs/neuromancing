@@ -107,24 +107,26 @@ async def _diary_reconcile(agent_id, tick_id, account_id, context, valid_actions
 
     async with SessionLocal() as session:
         for p in placed:
-            sym, side = p["symbol"], p.get("side")
+            sym, intent = p["symbol"], p.get("intent")
             try:
                 pos = pos_by_sym.get(sym)
-                held = pos is not None and float(pos.get("qty", 0)) > 0
-                if side == "buy" and held:
+                qty = float(pos.get("qty", 0)) if pos else 0.0
+                held = pos is not None and qty != 0  # either sign
+                if intent in ("buy", "short") and held:
+                    # Open (or average) an episode — signed qty (short is negative).
                     entry = float(pos.get("avg_entry_price") or pos.get("avg_entry") or 0)
-                    qty = float(pos["qty"])
                     if entry <= 0:
                         continue
                     act = action_by_sym.get(sym, {})
                     sig = context["signals"].get(sym, {})
                     await diary.open_or_update(
                         session, agent_id, sym, entry_price=entry, qty=qty, tick_id=tick_id,
-                        strategy_id=sig.get("strategy_id"), notional=entry * qty, signal=sig,
+                        strategy_id=sig.get("strategy_id"), notional=entry * abs(qty), signal=sig,
                         rationale=act.get("rationale", ""),
                         entry_context={"equity": context.get("equity")},
                     )
-                elif side == "sell" and not held:
+                elif intent in ("close", "sell", "cover") and not held:
+                    # Closed back to flat (a long sold or a short covered).
                     px = await _exit_price(p)
                     if px is not None:
                         await diary.close_open(session, agent_id, sym,
@@ -146,6 +148,7 @@ async def apply_activity(payload: dict) -> dict:
     gctx = GuardrailContext(
         equity=context["equity"],
         cash=context["cash"],
+        buying_power=float(context.get("buying_power", context["cash"])),
         positions=context["positions"],
         position_values=context["position_values"],
         signals={s: v["action"] for s, v in context["signals"].items()},
@@ -165,36 +168,40 @@ async def apply_activity(payload: dict) -> dict:
         symbol = action["symbol"]
         asset_class = "crypto" if is_crypto(symbol) else "equity"
         coid = f"{tick_id}#{idx}"
-        if action["type"] == "close":
-            qty = context["positions"].get(symbol, 0)
-            if qty <= 0:
+        pos_qty = float(context["positions"].get(symbol, 0))
+        side = action.get("side")
+
+        if action["type"] == "close" or side in ("sell", "cover"):
+            # Close/cover: resolve direction from the held sign (long→sell, short→buy),
+            # reduce_only so trade-api can't flip on a stale close.
+            if pos_qty == 0:
                 continue
-            order = {"symbol": symbol, "side": "sell", "order_type": "market",
-                     "qty": str(qty), "asset_class": asset_class,
+            close_side = "sell" if pos_qty > 0 else "buy"
+            order = {"symbol": symbol, "side": close_side, "order_type": "market",
+                     "qty": str(abs(pos_qty)), "asset_class": asset_class, "reduce_only": True,
                      "client_order_id": coid, "source": "agent", "source_ref": tick_id}
-        else:  # order
-            order = {"symbol": symbol, "side": action["side"], "order_type": "market",
-                     "asset_class": asset_class, "client_order_id": coid,
-                     "source": "agent", "source_ref": tick_id}
+        else:  # open: buy (long) or short (sell-to-open)
+            order = {"symbol": symbol, "side": "sell" if side == "short" else "buy",
+                     "order_type": "market", "asset_class": asset_class,
+                     "client_order_id": coid, "source": "agent", "source_ref": tick_id}
             if action.get("notional") is not None:
                 order["notional"] = str(action["notional"])
             else:
                 order["qty"] = str(action.get("qty"))
-            # Attach deterministic exit levels on buys. Default stop FLOOR so no
-            # position is ever left unprotected, even if the model omitted one.
-            if action["side"] == "buy":
-                risk_p = agent.get("risk_profile", {})
-                sl = action.get("stop_loss_pct") or risk_p.get("stop_loss_pct") or DEFAULT_STOP_LOSS_PCT
-                order["stop_loss_pct"] = str(sl)
-                tp = action.get("take_profit_pct") or risk_p.get("take_profit_pct")
-                if tp:
-                    order["take_profit_pct"] = str(tp)
-                trail = action.get("trailing_stop_pct") or risk_p.get("trailing_stop_pct")
-                if trail:
-                    order["trailing_stop_pct"] = str(trail)
+            # Mandatory stop FLOOR on every open (long AND short) so nothing is ever
+            # left unprotected — for a short this bounds the otherwise-unbounded loss.
+            risk_p = agent.get("risk_profile", {})
+            sl = action.get("stop_loss_pct") or risk_p.get("stop_loss_pct") or DEFAULT_STOP_LOSS_PCT
+            order["stop_loss_pct"] = str(sl)
+            tp = action.get("take_profit_pct") or risk_p.get("take_profit_pct")
+            if tp:
+                order["take_profit_pct"] = str(tp)
+            trail = action.get("trailing_stop_pct") or risk_p.get("trailing_stop_pct")
+            if trail:
+                order["trailing_stop_pct"] = str(trail)
         try:
             res = await trade.place_order(account_id, order)
-            placed.append({**res, "symbol": symbol, "side": order["side"]})
+            placed.append({**res, "symbol": symbol, "side": order["side"], "intent": side or "close"})
         except Exception as e:  # noqa: BLE001 — one bad order can't kill the tick
             failed.append({"action": action, "error": str(e)})
 

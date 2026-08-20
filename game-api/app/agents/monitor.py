@@ -52,9 +52,10 @@ async def monitor_positions_activity() -> dict:
             agent = by_ref.get(e["account_ref"])
             if agent is None:
                 continue
+            side = e.get("side", "sell")  # long exit = sell, short cover = buy
             fe = FeedEvent(
                 agent_id=agent.id, ts=now, type=FeedEventType.trade,
-                payload={"symbol": e["symbol"], "side": "sell", "exit": True,
+                payload={"symbol": e["symbol"], "side": side, "exit": True,
                          "reason": e["reason"], "price": e["price"], "realized": e["realized"]},
             )
             session.add(fe)
@@ -75,7 +76,7 @@ async def monitor_positions_activity() -> dict:
             await redis.publish("feed", json.dumps({
                 "agent_id": agent.id, "handle": agent.handle,
                 "display_name": agent.display_name, "type": "trade",
-                "symbol": e["symbol"], "side": "sell", "exit": True,
+                "symbol": e["symbol"], "side": e.get("side", "sell"), "exit": True,
                 "reason": e["reason"], "ts": now.isoformat(),
             }))
         except Exception as ex:  # noqa: BLE001

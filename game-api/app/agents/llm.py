@@ -24,6 +24,7 @@ from .tools import TOOLS
 log = logging.getLogger("neuromancing.llm")
 
 FALLBACK_MODEL = "deterministic-fallback"
+DEFAULT_STOP_LOSS_PCT = 0.08  # mandatory floor the fallback attaches to a short open
 
 # Reused across calls — one client + pool per provider base_url, not one per tick/agent.
 _clients: dict[str, object] = {}
@@ -63,14 +64,19 @@ def _system_prompt(persona: dict) -> str:
         f"Risk temperament: {persona.get('risk_temperament', 'balanced')}\n\n"
         "You are the MANAGEMENT layer. Deterministic strategies produce the trade "
         "signals; you decide position sizing, which signals to act on or skip, when "
-        "to close, and overall risk. You may ONLY act on symbols that have a current "
-        "signal (to buy) or an open position (to close/sell). Never invent trades. "
+        "to close, and overall risk. You may ONLY act on symbols that have a matching "
+        "current signal — a 'buy' signal to open a LONG (size_order side=buy), a 'short' "
+        "signal to open a SHORT / sell-to-open (size_order side=short) — or an open "
+        "position to close (close_position sells a long or covers a short). Never invent "
+        "trades. A SHORT profits when price FALLS and its loss is otherwise unbounded, so "
+        "always set a stop_loss_pct on it (a default floor is applied if you don't). "
+        "Positions carry a SIGNED qty: negative means you are short that symbol. "
         "Each signal carries `sources` (the per-strategy signals behind it, each with "
         "indicator `features`) and a `conflict` flag when your own strategies disagree "
         "on that symbol — weigh both when sizing or skipping; be more cautious on "
         "conflict. "
         "Use size_order/close_position/skip_signal for decisions and post_to_feed for "
-        "one short in-character message. Set a stop_loss_pct on every buy (and, when it "
+        "one short in-character message. Set a stop_loss_pct on every open (and, when it "
         "fits your style, a take_profit_pct or trailing_stop_pct) — these are enforced "
         "deterministically the instant price crosses them. Never give financial advice "
         "or promise returns."
@@ -90,7 +96,8 @@ def _llm_view(context: dict) -> dict:
     return {
         "equity": context.get("equity"),
         "cash": context.get("cash"),
-        "positions": positions,
+        "buying_power": context.get("buying_power"),
+        "positions": positions,  # SIGNED qty (negative = short)
         "position_values": context.get("position_values", {}),
         "signals": signals,
         "marks": {s: marks[s] for s in keep if s in marks},
@@ -109,15 +116,25 @@ def _fallback(context: dict, persona: dict) -> dict:
     for symbol, sig in signals.items():
         action = sig.get("action")
         strength = float(sig.get("strength", 0.0))
+        qty = positions.get(symbol, 0)
         if action == "buy":
             notional = round(max(50.0, equity * 0.08 * (0.5 + strength)), 2)
             actions.append({"type": "order", "symbol": symbol, "side": "buy",
                             "notional": notional, "rationale": f"signal buy (strength {strength:.2f})"})
             notes.append(f"opening {symbol}")
-        elif action in ("exit", "sell") and positions.get(symbol, 0) > 0:
-            actions.append({"type": "close", "symbol": symbol,
-                            "rationale": "signal exit"})
+        elif action == "short":
+            notional = round(max(50.0, equity * 0.08 * (0.5 + strength)), 2)
+            # Fallback shorts always carry a stop (loss is otherwise unbounded).
+            actions.append({"type": "order", "symbol": symbol, "side": "short",
+                            "notional": notional, "stop_loss_pct": DEFAULT_STOP_LOSS_PCT,
+                            "rationale": f"signal short (strength {strength:.2f})"})
+            notes.append(f"shorting {symbol}")
+        elif action in ("exit", "sell") and qty > 0:
+            actions.append({"type": "close", "symbol": symbol, "rationale": "signal exit"})
             notes.append(f"closing {symbol}")
+        elif action == "cover" and qty < 0:
+            actions.append({"type": "close", "symbol": symbol, "rationale": "signal cover"})
+            notes.append(f"covering {symbol}")
 
     narration = "; ".join(notes) if notes else "holding — no compelling signals this tick"
     post = None

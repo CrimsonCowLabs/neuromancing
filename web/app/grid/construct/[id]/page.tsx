@@ -204,10 +204,12 @@ export default async function ConstructDetail({ params }: { params: Promise<{ id
               </div>
               {positions.length === 0 && <div style={{ fontSize: 12, color: "var(--color-neutral-600)", padding: "14px 10px" }}>Flat.</div>}
               {positions.map((p) => {
-                const flat = Number(p.qty) === 0;
+                const q = Number(p.qty);
+                const flat = q === 0;
+                const short = q < 0;
                 return (
                   <div key={p.symbol} style={{ display: "grid", gridTemplateColumns: "minmax(80px,1.2fr) minmax(52px,80px) minmax(56px,90px) minmax(44px,64px) minmax(44px,64px) minmax(36px,56px)", gap: 6, alignItems: "center", padding: "8px 10px", background: "linear-gradient(to right,transparent,var(--color-accent-900) 32px,var(--color-accent-900) calc(100% - 32px),transparent) no-repeat bottom / 100% 1px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}><span style={{ fontSize: 12.5, color: flat ? "var(--color-neutral-500)" : "var(--color-text)", whiteSpace: "nowrap" }}>{p.symbol}</span><span style={{ fontSize: 9, padding: "0 6px", border: "1px solid var(--color-neutral-800)", color: "var(--color-neutral-600)" }}>{p.asset_class}</span></div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}><span style={{ fontSize: 12.5, color: flat ? "var(--color-neutral-500)" : "var(--color-text)", whiteSpace: "nowrap" }}>{p.symbol}</span>{!flat && <span style={{ fontSize: 9, padding: "0 6px", border: `1px solid ${short ? DOWN : UP}`, color: short ? DOWN : UP }}>{short ? "SHORT" : "LONG"}</span>}<span style={{ fontSize: 9, padding: "0 6px", border: "1px solid var(--color-neutral-800)", color: "var(--color-neutral-600)" }}>{p.asset_class}</span></div>
                     <span style={{ textAlign: "right", fontSize: 12, fontVariantNumeric: "tabular-nums", color: flat ? "var(--color-neutral-700)" : "var(--color-neutral-300)" }}>{Number(p.qty).toFixed(4)}</span>
                     <span style={{ textAlign: "right", fontSize: 12, fontVariantNumeric: "tabular-nums", color: flat ? "var(--color-neutral-700)" : "var(--color-neutral-300)" }}>${Number(p.avg_entry_price).toFixed(2)}</span>
                     <span style={{ textAlign: "right", fontSize: 12, fontVariantNumeric: "tabular-nums", color: p.stop_loss_pct ? DOWN : "var(--color-neutral-700)" }}>{p.stop_loss_pct ? `−${(p.stop_loss_pct * 100).toFixed(1)}%` : "—"}</span>
