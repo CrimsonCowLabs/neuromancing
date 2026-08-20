@@ -40,10 +40,45 @@ def test_sell_realizes_pnl_and_adds_cash():
     assert out.realized_pnl == D("100")  # 10 * (60-50)
 
 
-def test_oversized_sell_rejected():
-    with pytest.raises(ValueError):
-        apply_fill(cash=ZERO, position=PositionState(D("5"), D("50")),
-                   side="sell", qty=D("10"), price=D("60"), fees=D("0"))
+def test_oversized_sell_caps_at_long_no_flip():
+    # Signed model: a sell exceeding the long closes it (caps at held qty) and does NOT
+    # flip to a short. filled_qty reports the executed 5, position goes flat.
+    out = apply_fill(cash=ZERO, position=PositionState(D("5"), D("50")),
+                     side="sell", qty=D("10"), price=D("60"), fees=D("0"))
+    assert out.filled_qty == D("5")
+    assert out.position.qty == ZERO
+    assert out.realized_pnl == D("50")  # 5 * (60-50)
+    assert out.cash == D("300")  # proceeds of the 5 sold
+
+
+def test_short_open_credits_cash_and_goes_negative():
+    out = apply_fill(cash=D("1000"), position=PositionState(ZERO, ZERO),
+                     side="sell", qty=D("10"), price=D("50"), fees=D("0"))
+    assert out.position.qty == D("-10")       # short
+    assert out.position.avg_entry == D("50")
+    assert out.cash == D("1500")              # received short proceeds
+    assert out.realized_pnl == ZERO
+
+
+def test_cover_realizes_short_pnl():
+    # Short 10 @ 50, cover @ 45 -> profit 10*(50-45)=50.
+    short = apply_fill(cash=D("1000"), position=PositionState(ZERO, ZERO),
+                       side="sell", qty=D("10"), price=D("50"), fees=D("0"))
+    cover = apply_fill(cash=short.cash, position=short.position,
+                       side="buy", qty=D("10"), price=D("45"), fees=D("0"))
+    assert cover.position.qty == ZERO
+    assert cover.realized_pnl == D("50")
+    assert cover.cash == D("1050")  # 1500 - 450 buyback
+
+
+def test_cover_caps_at_short_no_flip():
+    # A buy exceeding the short covers it fully (caps), never flips to a long.
+    short = apply_fill(cash=D("1000"), position=PositionState(ZERO, ZERO),
+                       side="sell", qty=D("5"), price=D("50"), fees=D("0"))
+    cover = apply_fill(cash=short.cash, position=short.position,
+                       side="buy", qty=D("10"), price=D("50"), fees=D("0"))
+    assert cover.filled_qty == D("5")
+    assert cover.position.qty == ZERO
 
 
 def test_positions_value():

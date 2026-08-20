@@ -56,3 +56,27 @@ def test_never_exits_on_stop_above_stop_price(entry, last, sl):
     if r.should_exit and r.reason == "stop_loss":
         # If it stopped out, price must be at/below the stop level.
         assert last <= entry * (D(1) - sl)
+
+
+# ── short mirror (qty < 0) ──
+def test_short_stop_triggers_at_or_above_level():
+    # short entry 100, 5% stop -> stop ABOVE at 105; 104.99 holds, 105 covers
+    assert not evaluate_exit(avg_entry=100, last=104.99, qty=-10, stop_loss_pct=0.05).should_exit
+    r = evaluate_exit(avg_entry=100, last=105, qty=-10, stop_loss_pct=0.05)
+    assert r.should_exit and r.reason == "stop_loss"
+
+
+def test_short_take_profit_triggers_below_level():
+    # short target 10% BELOW at 90; 91 holds, 90 covers for profit
+    assert not evaluate_exit(avg_entry=100, last=91, qty=-10, take_profit_pct=0.10).should_exit
+    r = evaluate_exit(avg_entry=100, last=90, qty=-10, take_profit_pct=0.10)
+    assert r.should_exit and r.reason == "take_profit"
+
+
+def test_short_trailing_uses_low_water():
+    # low-water 80, 5% trail -> stop at 84; 85 covers, 83 holds
+    assert evaluate_exit(avg_entry=100, last=85, qty=-10, high_water=80, trailing_stop_pct=0.05).should_exit
+    assert not evaluate_exit(avg_entry=100, last=83, qty=-10, high_water=80, trailing_stop_pct=0.05).should_exit
+    # ratchets DOWN
+    r = evaluate_exit(avg_entry=100, last=70, qty=-10, high_water=80, trailing_stop_pct=0.05)
+    assert r.high_water == D("70")

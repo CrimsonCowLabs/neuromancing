@@ -119,42 +119,61 @@ def limit_stop_crosses(
 class ExitDecision:
     should_exit: bool
     reason: str | None
-    high_water: Decimal  # ratcheted (monotonic non-decreasing) high-water price
+    high_water: Decimal  # ratcheted favorable-extreme mark (max since entry long / min short)
 
 
 def evaluate_exit(
     *,
     avg_entry,
     last,
+    qty=None,
     high_water=None,
     stop_loss_pct=None,
     take_profit_pct=None,
     trailing_stop_pct=None,
 ) -> ExitDecision:
-    """Pure deterministic exit decision for a long position given the latest price.
+    """Pure deterministic exit decision for a long OR short position.
 
-    Ratchets the trailing high-water monotonically, then checks the *tighter* of
-    the fixed stop and the trailing stop, then the take-profit. Returns whether to
-    exit, why, and the updated high-water (which the caller persists).
+    The `high_water` field generalizes to the favorable extreme since entry — the
+    HIGHEST price for a long, the LOWEST for a short. For a long: stop below entry,
+    take-profit above, trailing off the high; exit when price falls to the stop or
+    rises to the target. For a short everything mirrors: stop ABOVE entry, target
+    BELOW, trailing off the low; exit (cover) when price rises to the stop or falls
+    to the target. Direction is taken from `qty` sign (default long for back-compat).
     """
     avg_entry = D(avg_entry)
     last = D(last)
-    hw = D(high_water) if high_water is not None else avg_entry
-    if last > hw:  # ratchet — never decreases
-        hw = last
+    is_short = qty is not None and D(qty) < 0
+    wm = D(high_water) if high_water is not None else avg_entry
 
-    stops: list[tuple[Decimal, str]] = []
+    if not is_short:
+        if last > wm:  # ratchet the high-water up
+            wm = last
+        stops: list[tuple[Decimal, str]] = []
+        if stop_loss_pct:
+            stops.append((avg_entry * (D(1) - D(stop_loss_pct)), "stop_loss"))
+        if trailing_stop_pct:
+            stops.append((wm * (D(1) - D(trailing_stop_pct)), "trailing_stop"))
+        if stops:
+            eff_price, reason = max(stops, key=lambda s: s[0])  # tighter (higher) stop wins
+            if last <= eff_price:
+                return ExitDecision(True, reason, wm)
+        if take_profit_pct and last >= avg_entry * (D(1) + D(take_profit_pct)):
+            return ExitDecision(True, "take_profit", wm)
+        return ExitDecision(False, None, wm)
+
+    # ── short: mirror ──
+    if last < wm:  # ratchet the low-water down
+        wm = last
+    stops = []
     if stop_loss_pct:
-        stops.append((avg_entry * (D(1) - D(stop_loss_pct)), "stop_loss"))
+        stops.append((avg_entry * (D(1) + D(stop_loss_pct)), "stop_loss"))
     if trailing_stop_pct:
-        stops.append((hw * (D(1) - D(trailing_stop_pct)), "trailing_stop"))
+        stops.append((wm * (D(1) + D(trailing_stop_pct)), "trailing_stop"))
     if stops:
-        eff_price, reason = max(stops, key=lambda s: s[0])  # tighter (higher) stop wins
-        if last <= eff_price:
-            return ExitDecision(True, reason, hw)
-
-    if take_profit_pct:
-        if last >= avg_entry * (D(1) + D(take_profit_pct)):
-            return ExitDecision(True, "take_profit", hw)
-
-    return ExitDecision(False, None, hw)
+        eff_price, reason = min(stops, key=lambda s: s[0])  # tighter (lower) stop wins
+        if last >= eff_price:
+            return ExitDecision(True, reason, wm)
+    if take_profit_pct and last <= avg_entry * (D(1) - D(take_profit_pct)):
+        return ExitDecision(True, "take_profit", wm)
+    return ExitDecision(False, None, wm)

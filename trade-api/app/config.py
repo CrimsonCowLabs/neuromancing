@@ -11,6 +11,9 @@ class Settings(BaseServiceSettings):
     trade_api_service_token: str = "change-me-privileged-token"
     # DB schema this service owns.
     db_schema: str = "trade"
+    # Reg-T-style collateral a short position reserves against buying power
+    # (entry_price * |qty| * this). 1.5 ≈ 150% initial margin.
+    short_collateral_mult: float = 1.5
 
 
 @lru_cache

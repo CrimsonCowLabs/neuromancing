@@ -12,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from neuromancing_shared.money import D, ZERO, quantize_money
 
+from ..config import get_settings
 from ..engine.matching import compute_fill, evaluate_exit, limit_stop_crosses
-from ..engine.portfolio import PositionState, apply_fill, positions_value
+from ..engine.portfolio import PositionState, apply_fill, positions_value, short_collateral
 from ..models import (
     Account,
     AssetClass,
@@ -154,6 +155,7 @@ class SimBroker:
             tif=TIF(req.tif),
             source=req.source,  # type: ignore[arg-type]
             source_ref=req.source_ref,
+            reduce_only=req.reduce_only,
             stop_loss_pct=_clamp_pct(req.stop_loss_pct, _PCT_MAX["stop_loss_pct"]),
             take_profit_pct=_clamp_pct(req.take_profit_pct, _PCT_MAX["take_profit_pct"]),
             trailing_stop_pct=_clamp_pct(req.trailing_stop_pct, _PCT_MAX["trailing_stop_pct"]),
@@ -190,18 +192,30 @@ class SimBroker:
         )
 
         position = await self._get_position(order.account_id, order.symbol)
+        prev_qty = D(position.qty) if position else ZERO  # signed qty before this fill
         pos_state = PositionState(
-            qty=D(position.qty) if position else ZERO,
+            qty=prev_qty,
             avg_entry=D(position.avg_entry_price) if position else ZERO,
         )
 
-        # Guard rails at the broker (defense in depth beyond game-api guardrails).
-        if order.side == OrderSide.sell and fq.qty > pos_state.qty:
-            return await self._reject(order, "oversized sell (long-only)")
-        if order.side == OrderSide.buy:
-            cost = quantize_money(fq.qty * fq.price + fq.fees)
-            if cost > D(account.cash_balance):
-                return await self._reject(order, "insufficient buying power")
+        buy = order.side == OrderSide.buy
+        # A fill OPENS/increases when buy&flat/long or sell&flat/short; else it reduces.
+        is_open = (buy and prev_qty >= 0) or (not buy and prev_qty <= 0)
+        # reduce_only is the anti-flip / stale-close safety catch: it must only reduce.
+        if getattr(order, "reduce_only", False) and (is_open or prev_qty == 0):
+            return await self._reject(order, "reduce_only: nothing to reduce")
+
+        # Direction-aware affordability (defense in depth beyond game-api guardrails).
+        if is_open:
+            if buy:  # buy-to-open long spends cash
+                cost = quantize_money(fq.qty * fq.price + fq.fees)
+                if cost > D(account.buying_power):
+                    return await self._reject(order, "insufficient buying power")
+            else:    # sell-to-open short reserves reg-T collateral
+                mult = D(get_settings().short_collateral_mult)
+                reserve = quantize_money(fq.qty * fq.price * mult)
+                if reserve > D(account.buying_power):
+                    return await self._reject(order, "insufficient buying power (short collateral)")
 
         outcome = apply_fill(
             cash=account.cash_balance,
@@ -211,29 +225,17 @@ class SimBroker:
             price=fq.price,
             fees=fq.fees,
         )
+        filled = outcome.filled_qty  # a closing fill is capped at the held qty (no flip)
 
-        # Persist fill.
         self.session.add(
-            Fill(
-                order_id=order.id,
-                ts=_now(),
-                qty=fq.qty,
-                price=fq.price,
-                fees=fq.fees,
-                slippage_bps=fq.slippage_bps,
-            )
+            Fill(order_id=order.id, ts=_now(), qty=filled, price=fq.price,
+                 fees=outcome.fee, slippage_bps=fq.slippage_bps)  # prorated if the close was capped
         )
-        # Update account cash / buying power.
-        account.cash_balance = outcome.cash
-        account.buying_power = outcome.cash
         # Upsert position.
-        prev_qty = pos_state.qty  # qty before this fill
         if position is None:
             position = Position(
-                account_id=order.account_id,
-                symbol=order.symbol,
-                asset_class=order.asset_class,
-                qty=outcome.position.qty,
+                account_id=order.account_id, symbol=order.symbol,
+                asset_class=order.asset_class, qty=outcome.position.qty,
                 avg_entry_price=outcome.position.avg_entry,
             )
             self.session.add(position)
@@ -241,24 +243,33 @@ class SimBroker:
             position.qty = outcome.position.qty
             position.avg_entry_price = outcome.position.avg_entry
 
-        # Transfer deterministic exit config on buys.
-        if order.side == OrderSide.buy:
-            if prev_qty <= 0:
-                # (Re)opened from flat — reset; never inherit a closed position's levels.
+        # Transfer deterministic exit config on OPENS (long via buy, short via sell).
+        if is_open:
+            if prev_qty == 0:
+                # Fresh open from flat — reset; never inherit a closed position's levels.
                 position.stop_loss_pct = order.stop_loss_pct
                 position.take_profit_pct = order.take_profit_pct
                 position.trailing_stop_pct = order.trailing_stop_pct
                 position.high_water_price = fq.price
             else:
-                # Averaging in — override only what the new order specified.
+                # Increasing an existing position — override only what's specified, ratchet
+                # the favorable extreme (max for a long, min for a short).
                 if order.stop_loss_pct is not None:
                     position.stop_loss_pct = order.stop_loss_pct
                 if order.take_profit_pct is not None:
                     position.take_profit_pct = order.take_profit_pct
                 if order.trailing_stop_pct is not None:
                     position.trailing_stop_pct = order.trailing_stop_pct
-                hw = D(position.high_water_price) if position.high_water_price is not None else fq.price
-                position.high_water_price = max(hw, fq.price)
+                wm = D(position.high_water_price) if position.high_water_price is not None else fq.price
+                position.high_water_price = min(wm, fq.price) if outcome.position.qty < 0 else max(wm, fq.price)
+
+        # Update cash, then recompute buying power = cash − reserved short collateral.
+        account.cash_balance = outcome.cash
+        await self.session.flush()  # so the just-upserted position is visible to the sum
+        positions = await self.list_positions(order.account_id)
+        reserved = short_collateral(
+            [(p.qty, p.avg_entry_price) for p in positions], get_settings().short_collateral_mult)
+        account.buying_power = quantize_money(D(outcome.cash) - reserved)
 
         order.status = OrderStatus.filled
         order.filled_at = _now()
@@ -281,7 +292,7 @@ class SimBroker:
         row first) for a consistent order with place_order. Returns the exits."""
         res = await self.session.execute(
             select(Position).where(
-                Position.qty > 0,
+                Position.qty != 0,
                 or_(
                     Position.stop_loss_pct.isnot(None),
                     Position.take_profit_pct.isnot(None),
@@ -300,7 +311,8 @@ class SimBroker:
                 continue
             for p in sorted(by_account[account_id], key=lambda x: x.id):
                 await self.session.refresh(p)  # fresh state under the lock
-                if D(p.qty) <= 0:
+                pos_qty = D(p.qty)
+                if pos_qty == 0:
                     continue
                 quote = await get_quote(self.redis, p.symbol)
                 if quote is None or quote.stale:
@@ -308,6 +320,7 @@ class SimBroker:
                 decision = evaluate_exit(
                     avg_entry=p.avg_entry_price,
                     last=quote.last,
+                    qty=pos_qty,
                     high_water=p.high_water_price,
                     stop_loss_pct=p.stop_loss_pct,
                     take_profit_pct=p.take_profit_pct,
@@ -321,13 +334,15 @@ class SimBroker:
                 if await self._existing(account_id, coid) is not None:
                     continue  # idempotent — already exited this tick
                 avg_entry_before = D(p.avg_entry_price)
-                exit_qty = D(p.qty)
+                is_short = pos_qty < 0
+                exit_qty = -pos_qty if is_short else pos_qty  # positive fill qty
+                exit_side = OrderSide.buy if is_short else OrderSide.sell  # cover vs sell
                 order = Order(
                     account_id=account_id, client_order_id=coid, symbol=p.symbol,
-                    asset_class=p.asset_class, side=OrderSide.sell,
+                    asset_class=p.asset_class, side=exit_side,
                     order_type=OrderType.market, qty=exit_qty, tif=TIF.day,
                     source=OrderSource.agent, source_ref=f"exit:{decision.reason}",
-                    status=OrderStatus.pending,
+                    reduce_only=True, status=OrderStatus.pending,
                 )
                 self.session.add(order)
                 await self.session.flush()
@@ -341,11 +356,14 @@ class SimBroker:
                 )).scalar_one_or_none()
                 exit_price = D(fill.price) if fill else quote.last
                 fees = D(fill.fees) if fill else ZERO
+                # Signed realized: long = qty·(exit−entry), short = qty·(entry−exit).
+                realized = (exit_qty * (avg_entry_before - exit_price) if is_short
+                            else exit_qty * (exit_price - avg_entry_before)) - fees
                 exits.append({
                     "position_id": p.id, "account_ref": account.external_ref,
-                    "symbol": p.symbol, "reason": decision.reason,
+                    "symbol": p.symbol, "reason": decision.reason, "side": exit_side.value,
                     "qty": str(exit_qty), "price": str(exit_price),
-                    "realized": str(quantize_money(exit_qty * (exit_price - avg_entry_before) - fees)),
+                    "realized": str(quantize_money(realized)),
                 })
             await self.session.flush()
         return exits
