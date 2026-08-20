@@ -263,9 +263,15 @@ class SimBroker:
                 wm = D(position.high_water_price) if position.high_water_price is not None else fq.price
                 position.high_water_price = min(wm, fq.price) if outcome.position.qty < 0 else max(wm, fq.price)
 
+        # A position closed back to flat leaves no meaningful row — delete it so it doesn't
+        # linger as qty=0 clutter. A re-open later starts clean (_get_position → None).
+        # went_flat implies prev_qty != 0, so the row genuinely existed.
+        if outcome.position.qty == 0:
+            await self.session.delete(position)
+
         # Update cash, then recompute buying power = cash − reserved short collateral.
         account.cash_balance = outcome.cash
-        await self.session.flush()  # so the just-upserted position is visible to the sum
+        await self.session.flush()  # so the position delete/upsert is visible to the sum
         positions = await self.list_positions(order.account_id)
         reserved = short_collateral(
             [(p.qty, p.avg_entry_price) for p in positions], get_settings().short_collateral_mult)
@@ -330,7 +336,8 @@ class SimBroker:
                 if not decision.should_exit:
                     continue
 
-                coid = f"exit:{p.id}:{tick_id}"
+                pid, psym = p.id, p.symbol  # capture — the fill deletes the flat row
+                coid = f"exit:{pid}:{tick_id}"
                 if await self._existing(account_id, coid) is not None:
                     continue  # idempotent — already exited this tick
                 avg_entry_before = D(p.avg_entry_price)
@@ -338,7 +345,7 @@ class SimBroker:
                 exit_qty = -pos_qty if is_short else pos_qty  # positive fill qty
                 exit_side = OrderSide.buy if is_short else OrderSide.sell  # cover vs sell
                 order = Order(
-                    account_id=account_id, client_order_id=coid, symbol=p.symbol,
+                    account_id=account_id, client_order_id=coid, symbol=psym,
                     asset_class=p.asset_class, side=exit_side,
                     order_type=OrderType.market, qty=exit_qty, tif=TIF.day,
                     source=OrderSource.agent, source_ref=f"exit:{decision.reason}",
@@ -347,9 +354,7 @@ class SimBroker:
                 self.session.add(order)
                 await self.session.flush()
                 await self._fill_market(account, order, quote)
-                # Clear exit config on the now-flat position.
-                p.stop_loss_pct = p.take_profit_pct = p.trailing_stop_pct = None
-                p.high_water_price = None
+                # (the now-flat position row was deleted by the fill — no cleanup needed)
 
                 fill = (await self.session.execute(
                     select(Fill).where(Fill.order_id == order.id)
@@ -360,8 +365,8 @@ class SimBroker:
                 realized = (exit_qty * (avg_entry_before - exit_price) if is_short
                             else exit_qty * (exit_price - avg_entry_before)) - fees
                 exits.append({
-                    "position_id": p.id, "account_ref": account.external_ref,
-                    "symbol": p.symbol, "reason": decision.reason, "side": exit_side.value,
+                    "position_id": pid, "account_ref": account.external_ref,
+                    "symbol": psym, "reason": decision.reason, "side": exit_side.value,
                     "qty": str(exit_qty), "price": str(exit_price),
                     "realized": str(quantize_money(realized)),
                 })
