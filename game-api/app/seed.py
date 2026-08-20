@@ -73,10 +73,10 @@ ROSTER = [
      ["20-bar Momentum", "Momentum Breakout (Trend-Filtered)"],
      _MOMENTUM + DEFAULT_CRYPTO, 90),  # crypto 24/7
     ("riviera", "Riviera",
-     "Buy fear, sell greed. The crowd's perception is the opening.",
+     "Buy fear, sell greed — and short the crowd's euphoria. Perception is the opening.",
      "sardonic, silky, plays on perception", "cautious",
-     ["RSI Mean Reversion", "Bollinger Mean Reversion"],
-     _DEFENSIVE, 90),  # equity-only, sleeps off-hours
+     ["Bollinger Mean Reversion", "Bollinger Fade (Short)"],
+     _DEFENSIVE, 90),  # equity-only, sleeps off-hours; the only construct that shorts
     ("armitage", "Armitage",
      "Trends are the mission. Follow the signal, hold the line.",
      "clipped, military, systematic", "balanced",

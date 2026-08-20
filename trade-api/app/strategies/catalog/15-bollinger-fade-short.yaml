@@ -1,0 +1,23 @@
+# Short-side mean reversion (fits Riviera, the contrarian — fade the crowd). SHORT when
+# price pierces the UPPER Bollinger band (%B crosses above 1) AND RSI is overbought;
+# COVER on reversion back toward the middle band or a cold RSI. The mirror of Bollinger
+# Mean Reversion, using the short_when/cover_when grammar. Single-timeframe (5m).
+name: Bollinger Fade (Short)
+kind: indicator_dsl
+spec:
+  type: mean_reversion
+  base_timeframe: 5m
+  indicators:
+    - {id: bbpct, fn: bbpercent, period: 20, mult: 2.0, source: close, timeframe: 5m}
+    - {id: rsi14, fn: rsi, period: 14, source: close, timeframe: 5m}
+  states:
+    pierce_upper: {indicator: bbpct, cross: above, value: 1.0}
+    overbought: {indicator: rsi14, op: ">", value: 65}
+  short_when:
+    all: [pierce_upper, overbought]
+  cover_when:
+    any:
+      - {indicator: bbpct, op: "<", value: 0.5}
+      - {indicator: rsi14, op: "<", value: 40}
+  strength:
+    short: {from: rsi14, map: [65, 85]}
