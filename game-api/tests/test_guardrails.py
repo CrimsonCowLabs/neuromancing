@@ -73,3 +73,50 @@ def test_concentration_cap_blocks_overweight_add():
     r = validate([{"type": "order", "symbol": "AAPL", "side": "buy", "notional": 500}], ctx)
     assert not r.valid
     assert "concentration" in r.rejected[0]["reason"]
+
+
+# ── short selling ──
+def test_short_requires_signal():
+    ctx = _ctx(signals={}, buying_power=10000.0)
+    r = validate([{"type": "order", "symbol": "AAPL", "side": "short", "notional": 500,
+                   "stop_loss_pct": 0.08}], ctx)
+    assert not r.valid and "not backed by a current signal" in r.rejected[0]["reason"]
+
+
+def test_short_requires_stop():
+    ctx = _ctx(signals={"AAPL": "short"}, buying_power=10000.0)
+    r = validate([{"type": "order", "symbol": "AAPL", "side": "short", "notional": 500}], ctx)
+    assert not r.valid and "requires a stop" in r.rejected[0]["reason"]
+
+
+def test_short_with_signal_ok_capped_by_collateral():
+    ctx = _ctx(signals={"AAPL": "short"}, buying_power=1500.0)  # mult 1.5 -> bp_room 1000
+    r = validate([{"type": "order", "symbol": "AAPL", "side": "short", "notional": 999999,
+                   "stop_loss_pct": 0.08}], ctx)
+    assert len(r.valid) == 1
+    assert r.valid[0]["notional"] <= 1000.0  # collateral-capped
+    assert r.valid[0]["stop_loss_pct"] == 0.08
+
+
+def test_cover_requires_open_short():
+    ctx = _ctx(positions={"AAPL": -10.0})
+    r = validate([{"type": "order", "symbol": "AAPL", "side": "cover"}], ctx)
+    assert len(r.valid) == 1
+    r2 = validate([{"type": "order", "symbol": "AAPL", "side": "cover"}], _ctx(positions={}))
+    assert not r2.valid and "no open short" in r2.rejected[0]["reason"]
+
+
+def test_close_works_for_short_position():
+    ctx = _ctx(positions={"AAPL": -10.0})  # held short
+    r = validate([{"type": "close", "symbol": "AAPL"}], ctx)
+    assert len(r.valid) == 1  # close accepts either sign
+
+
+def test_no_short_while_long_and_no_buy_while_short():
+    long_ctx = _ctx(signals={"AAPL": "short"}, positions={"AAPL": 5.0}, buying_power=10000.0)
+    r = validate([{"type": "order", "symbol": "AAPL", "side": "short", "notional": 500,
+                   "stop_loss_pct": 0.08}], long_ctx)
+    assert not r.valid and "close the long" in r.rejected[0]["reason"]
+    short_ctx = _ctx(signals={"AAPL": "buy"}, positions={"AAPL": -5.0})
+    r2 = validate([{"type": "order", "symbol": "AAPL", "side": "buy", "notional": 500}], short_ctx)
+    assert not r2.valid and "cover the short" in r2.rejected[0]["reason"]

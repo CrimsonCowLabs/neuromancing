@@ -68,7 +68,9 @@ async def close_open(
     row.exit_price = Decimal(str(exit_price))
     row.exit_reason = exit_reason
     row.realized_pnl = Decimal(str(round(realized, 8)))
-    row.return_pct = round((exit_price / entry - 1.0), 6) if entry else 0.0
+    # Sign-aware: a short (qty<0) profits when exit < entry, so its return flips.
+    direction = 1.0 if qty >= 0 else -1.0
+    row.return_pct = round(direction * (exit_price / entry - 1.0), 6) if entry else 0.0
     row.holding_secs = int((closed_at - opened).total_seconds())
     row.outcome = "win" if realized > 0 else ("loss" if realized < 0 else "flat")
     return row

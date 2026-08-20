@@ -27,20 +27,28 @@ def actionable_signals(
     signals: dict, positions: dict, position_values: dict, equity: float,
     max_position_pct: float = DEFAULT_MAX_POSITION_PCT,
 ) -> dict:
-    """Keep only signals that would actually change something given holdings — so
-    a persistent signal for a position already at its cap doesn't invoke the LLM
-    every tick. Mirrors the guardrail's own acceptance so it never suppresses a
-    trade the guardrails would allow (buy: room under the concentration cap;
-    exit/sell: the position is actually held)."""
+    """Keep only signals that would actually change something given holdings — so a
+    persistent signal for a position already at its cap doesn't invoke the LLM every
+    tick. Mirrors the guardrail's acceptance (signed positions): buy/short need room
+    under the concentration cap on that side; exit/sell needs a held long; cover needs
+    a held short."""
     cap = max_position_pct * equity
     out: dict = {}
     for symbol, sig in signals.items():
         action = sig.get("action")
+        qty = positions.get(symbol, 0)
+        val = position_values.get(symbol, 0.0)
         if action == "buy":
-            if position_values.get(symbol, 0.0) < cap:
+            if val < cap:  # room to add to a long
+                out[symbol] = sig
+        elif action == "short":
+            if abs(min(0.0, val)) < cap:  # room to add to a short
                 out[symbol] = sig
         elif action in ("exit", "sell"):
-            if positions.get(symbol, 0) > 0:
+            if qty > 0:  # a held long to close
+                out[symbol] = sig
+        elif action == "cover":
+            if qty < 0:  # a held short to close
                 out[symbol] = sig
     return out
 
@@ -151,6 +159,7 @@ async def build_context(agent: dict, equity_open: bool = True) -> dict | None:
     equity_info = await trade.mark_to_market(account_id, marks)
     equity = float(equity_info["total_equity"])
     cash = float(account["cash_balance"])
+    buying_power = float(account.get("buying_power", cash))
 
     position_values = {
         s: positions[s] * float(marks[s]) for s in positions if s in marks
@@ -191,6 +200,7 @@ async def build_context(agent: dict, equity_open: bool = True) -> dict | None:
         "account_id": account_id,
         "equity": equity,
         "cash": cash,
+        "buying_power": buying_power,
         "positions": positions,
         "position_values": position_values,
         "signals": signals,
