@@ -129,3 +129,17 @@ def test_strike_for_delta_inverts():
     assert kp is not None and kp < 200
     ivp = iv_model(200.0, kp, t, 0.25)
     assert abs(bs.greeks(200.0, kp, t, 0.04, ivp, "put")["delta"] + 0.30) < 0.02
+
+
+# ── short/flat backtest replay (Phase 2) ──
+def test_short_strategy_backtests_short_flat():
+    from app.strategies.backtest import _Book
+
+    # Short at 100, cover at 90 -> profit; the signed book credits proceeds on open.
+    b = _Book(cash=10000.0, cost=0.0)
+    b.step("short", 100.0)
+    assert b.qty < 0 and b.trades == 1
+    assert b.equity(100.0) == 10000.0        # equity unchanged at open (no cost)
+    b.step("cover", 90.0)
+    assert b.qty == 0.0 and b.wins == 1
+    assert b.equity(90.0) > 10000.0          # profited on the decline

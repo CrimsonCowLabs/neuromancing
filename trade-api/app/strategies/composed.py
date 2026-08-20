@@ -121,11 +121,13 @@ def evaluate_composed(spec: dict, bars_by_tf: dict[str, list]) -> Signal:
         return node_true(group, 0) and not node_true(group, 1)
 
     feats = {iid: raw.get((iid, 0)) for iid in inds}
-    buy, exit_ = spec.get("buy_when"), spec.get("exit_when")
-    if buy and fired(buy):
-        return Signal("buy", _strength(spec, "buy", raw), {"dsl": "buy", **feats})
-    if exit_ and fired(exit_):
-        return Signal("exit", _strength(spec, "exit", raw), {"dsl": "exit", **feats})
+    # Precedence: long entry, long exit, short cover (close), short entry. Long-only
+    # strategies (no short/cover_when) behave exactly as before.
+    for group_key, action in (("buy_when", "buy"), ("exit_when", "exit"),
+                              ("cover_when", "cover"), ("short_when", "short")):
+        group = spec.get(group_key)
+        if group and fired(group):
+            return Signal(action, _strength(spec, action, raw), {"dsl": action, **feats})
     return HOLD
 
 
