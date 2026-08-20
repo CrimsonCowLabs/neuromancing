@@ -83,6 +83,8 @@ class StrategySpec(BaseModel):
     states: dict[str, dict] = {}
     buy_when: dict | None = None
     exit_when: dict | None = None
+    short_when: dict | None = None   # open a short (sell-to-open)
+    cover_when: dict | None = None   # close a short (buy-to-close)
     strength: dict | None = None
 
     @model_validator(mode="after")
@@ -160,17 +162,16 @@ class StrategySpec(BaseModel):
             else:
                 check_cond(node)  # inline condition
 
-        if not self.buy_when and not self.exit_when:
-            raise ValueError("strategy needs buy_when and/or exit_when")
-        if self.buy_when:
-            check_group(self.buy_when)
-        if self.exit_when:
-            check_group(self.exit_when)
+        if not any((self.buy_when, self.exit_when, self.short_when, self.cover_when)):
+            raise ValueError("strategy needs at least one of buy/exit/short/cover_when")
+        for group in (self.buy_when, self.exit_when, self.short_when, self.cover_when):
+            if group:
+                check_group(group)
 
         if self.strength is not None:
             for side, sp in self.strength.items():
-                if side not in ("buy", "exit"):
-                    raise ValueError(f"strength side must be buy/exit: {side}")
+                if side not in ("buy", "exit", "short", "cover"):
+                    raise ValueError(f"strength side must be buy/exit/short/cover: {side}")
                 if not isinstance(sp, dict) or sp.get("from") not in by_id:
                     raise ValueError(f"strength.{side}.from must reference an indicator")
                 mp = sp.get("map")
