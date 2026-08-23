@@ -41,6 +41,10 @@ class Settings(BaseServiceSettings):
     ingest_rest_timeout_s: float = 30.0          # per blocking Alpaca REST call
     ingest_deadman_stale_s: float = 300.0        # deadman: os._exit(1) → container restart
     ingest_health_stale_s: float = 300.0         # healthcheck + UI "data stale" threshold
+    # Fault injection for drills: when enabled, setting the Redis key `ingest:debug:freeze`
+    # makes the crypto stream stop writing quotes (simulate a silent/half-open feed) so the
+    # watchdog→deadman→recover chain can be exercised live. OFF in prod (default false).
+    ingest_debug_freeze_enabled: bool = False
 
     def _tf_map(self, raw: str) -> dict[str, int]:
         out: dict[str, int] = {}

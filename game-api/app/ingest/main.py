@@ -155,6 +155,8 @@ async def main() -> None:
             freshness=lambda: health.crypto_feed_age(price_store._redis),
             max_silence=settings.ingest_crypto_max_silence_s)))
         tasks.append(asyncio.create_task(_supervise("deadman", _deadman_job)))
+        if settings.ingest_debug_freeze_enabled:  # drills only — inert unless enabled
+            tasks.append(asyncio.create_task(_supervise("freeze-flag", alpaca_feed.watch_freeze_flag)))
         tasks.append(asyncio.create_task(
             _supervise("crypto-higher-tf", alpaca_feed.refresh_crypto_higher_tf)))
         for tf in settings.timeframes:

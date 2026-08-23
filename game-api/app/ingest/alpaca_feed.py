@@ -22,6 +22,24 @@ from .universe import DEFAULT_CRYPTO
 
 log = logging.getLogger("neuromancing.ingest.alpaca")
 
+# Fault-injection flag (drills only): when the Redis key `ingest:debug:freeze` is set AND
+# INGEST_DEBUG_FREEZE_ENABLED is on, the stream stops writing quotes/bars — a live-simulated
+# silent/half-open feed for exercising the watchdog→deadman→recover chain. Default off.
+_FROZEN = False
+_FREEZE_KEY = "ingest:debug:freeze"
+
+
+async def watch_freeze_flag() -> None:
+    """Refresh the module freeze flag from Redis every 2s (only wired when the debug env is on)."""
+    global _FROZEN
+    log.warning("DEBUG freeze injection ENABLED — %r toggles the crypto feed silent", _FREEZE_KEY)
+    while True:
+        new = bool(await price_store._redis.get(_FREEZE_KEY))
+        if new != _FROZEN:
+            _FROZEN = new
+            log.error("DEBUG: crypto feed %s (fault injection)", "FROZEN" if new else "UNFROZEN")
+        await asyncio.sleep(2)
+
 
 async def run_crypto_stream() -> None:
     """Supervised crypto websocket: 1m bars + quotes → Redis hot."""
@@ -30,9 +48,13 @@ async def run_crypto_stream() -> None:
     settings = get_settings()
 
     async def on_bar(bar) -> None:
+        if _FROZEN:
+            return
         await price_store.ingest_bars(bar.symbol, "1m", [alpaca_bar_dict(bar)], archive=False)
 
     async def on_quote(q) -> None:
+        if _FROZEN:  # fault injection: drop writes to simulate a silent feed
+            return
         bid = float(q.bid_price) if getattr(q, "bid_price", None) else None
         ask = float(q.ask_price) if getattr(q, "ask_price", None) else None
         last = ask or bid
