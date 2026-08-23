@@ -61,12 +61,14 @@ export default async function ConstructDetail({ params }: { params: Promise<{ id
   }
   const handle: string = profile.handle;
   // Sub-resources by handle (degrade gracefully — a warm-up/empty state must not 500).
-  const [posts, equity, experiments, diaryRows] = await Promise.all([
+  const [posts, equity, experiments, diaryRows, board] = await Promise.all([
     api<any[]>(`/agents/${handle}/posts?limit=12`).catch(() => []),
     api<{ ts: string; equity: number }[]>(`/agents/${handle}/equity?limit=500`).catch(() => []),
     api<any[]>(`/agents/${handle}/experiments?limit=8`).catch(() => []),
     api<any[]>(`/agents/${handle}/diary?limit=20`).catch(() => []),
+    api<{ data_stale?: boolean }>(`/leaderboard`).catch(() => ({ data_stale: false })),
   ]);
+  const dataStale = !!board.data_stale;
 
   const retTone = (profile.return_pct ?? 0) >= 0 ? UP : DOWN;
   const risk = profile.config?.risk_profile ?? {};
@@ -97,6 +99,12 @@ export default async function ConstructDetail({ params }: { params: Promise<{ id
           </span>
           <a href="/" className="btn btn-primary" style={{ flex: "none", fontSize: 11, letterSpacing: ".1em" }}>JACK IN</a>
         </nav>
+
+        {dataStale && (
+          <div role="status" style={{ padding: "8px 40px", fontSize: 11, letterSpacing: ".14em", textAlign: "center", color: "#cf8f8f", background: "rgba(207,143,143,.08)", borderBottom: "1px solid rgba(207,143,143,.3)" }}>
+            ⚠ MARKET DATA STALE — the feed is reconnecting; prices may be frozen
+          </div>
+        )}
 
         <div style={{ maxWidth: 1180, margin: "0 auto", padding: "40px 40px 56px", display: "flex", flexDirection: "column", gap: 22 }}>
 

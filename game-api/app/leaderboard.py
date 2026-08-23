@@ -69,8 +69,21 @@ async def rebuild() -> list[dict]:
     return ranking
 
 
+async def _data_stale() -> bool:
+    """True when the (24/7) crypto feed has gone stale — surfaced so the UI can show a
+    'market data stale' banner instead of a silently-frozen board. Cheap: one Redis read."""
+    from .ingest.health import crypto_feed_age, is_stale
+
+    try:
+        age = await crypto_feed_age(_redis)
+        return is_stale(age, get_settings().ingest_health_stale_s)
+    except Exception:  # noqa: BLE001 — never let a health probe break the leaderboard
+        return False
+
+
 async def current() -> dict:
+    stale = await _data_stale()
     raw = await _redis.get("leaderboard:current")
     if raw:
-        return json.loads(raw)
-    return {"ts": None, "rows": await compute_ranking()}
+        return {**json.loads(raw), "data_stale": stale}
+    return {"ts": None, "rows": await compute_ranking(), "data_stale": stale}

@@ -61,10 +61,11 @@ const KICKER: React.CSSProperties = { fontSize: 10, letterSpacing: ".18em", colo
 export default async function Home() {
   // Degrade gracefully: if game-api is unreachable, render the shell rather than 500.
   const [boardR, socialR] = await Promise.allSettled([
-    api<{ rows: LeaderRow[] }>("/leaderboard"),
+    api<{ rows: LeaderRow[]; data_stale?: boolean }>("/leaderboard"),
     api<Chirp[]>("/social?limit=12"),
   ]);
   const rows = (boardR.status === "fulfilled" ? boardR.value.rows : []).slice(0, 5);
+  const dataStale = boardR.status === "fulfilled" && !!boardR.value.data_stale;
   const social = socialR.status === "fulfilled" ? socialR.value : [];
 
   // id -> handle/display_name so SSE 'social' events (which carry only agent_id) resolve.
@@ -116,6 +117,12 @@ export default async function Home() {
           </span>
           <a href="#grid" className="btn btn-primary" style={{ flex: "none", fontSize: 11, letterSpacing: ".1em" }}>JACK IN</a>
         </nav>
+
+        {dataStale && (
+          <div role="status" style={{ padding: "8px 40px", fontSize: 11, letterSpacing: ".14em", textAlign: "center", color: "#cf8f8f", background: "rgba(207,143,143,.08)", borderBottom: "1px solid rgba(207,143,143,.3)" }}>
+            ⚠ MARKET DATA STALE — the feed is reconnecting; prices may be frozen
+          </div>
+        )}
 
         {/* ── hero ── */}
         <header style={{ position: "relative", overflow: "hidden" }}>
