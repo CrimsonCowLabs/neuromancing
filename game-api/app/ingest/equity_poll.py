@@ -17,6 +17,7 @@ from neuromancing_shared import price_store
 
 from ..agents import market_hours
 from ..config import get_settings
+from .rest import call_rest, inject_timeout
 from .store import alpaca_bar_dict
 from .tf import alpaca_tf, tf_seconds
 from .universe import equity_universe
@@ -41,7 +42,8 @@ async def _poll_once(stock_client, symbols, timeframe, feed, batch) -> int:
         try:
             req = StockBarsRequest(symbol_or_symbols=chunk, timeframe=alpaca_tf(timeframe),
                                    start=start, feed=feed)
-            barset = await asyncio.to_thread(stock_client.get_stock_bars, req)
+            barset = await call_rest(stock_client.get_stock_bars, req,
+                                     timeout=get_settings().ingest_rest_timeout_s)
             data = getattr(barset, "data", {}) or {}
             for symbol, bars in data.items():
                 if not bars:
@@ -63,7 +65,9 @@ async def poll_timeframe(timeframe: str) -> None:
     from alpaca.data.historical import StockHistoricalDataClient
 
     settings = get_settings()
-    stock_client = StockHistoricalDataClient(settings.alpaca_api_key, settings.alpaca_api_secret)
+    stock_client = inject_timeout(
+        StockHistoricalDataClient(settings.alpaca_api_key, settings.alpaca_api_secret),
+        settings.ingest_rest_timeout_s)
     symbols = list(equity_universe(settings.price_universe))
     cadence = settings.poll_seconds.get(timeframe, tf_seconds(timeframe))
     log.info("equity poller started: tf=%s cadence=%ss symbols=%d", timeframe, cadence, len(symbols))

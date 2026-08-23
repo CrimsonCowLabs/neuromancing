@@ -32,6 +32,15 @@ class Settings(BaseServiceSettings):
     price_gapfill_seconds: int = 1800
     # Max symbols per batched Alpaca bars request.
     price_batch_size: int = 100
+    # ---- Feed self-healing (market-ingest watchdog / deadman / healthcheck) ----
+    # Crypto is 24/7, so quote silence == a stalled feed. The watchdog reconnects the
+    # stream in-loop; the deadman force-restarts the process; both key off the freshest
+    # crypto quote age. Ordered watchdog < deadman/health so the cheap reconnect goes first.
+    ingest_crypto_max_silence_s: float = 120.0   # watchdog: reconnect the stream past this
+    ingest_watch_interval_s: float = 15.0        # how often the watchdog polls freshness
+    ingest_rest_timeout_s: float = 30.0          # per blocking Alpaca REST call
+    ingest_deadman_stale_s: float = 300.0        # deadman: os._exit(1) → container restart
+    ingest_health_stale_s: float = 300.0         # healthcheck + UI "data stale" threshold
 
     def _tf_map(self, raw: str) -> dict[str, int]:
         out: dict[str, int] = {}

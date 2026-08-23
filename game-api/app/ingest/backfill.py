@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from neuromancing_shared import price_store
 
 from ..config import get_settings
+from .rest import call_rest, inject_timeout
 from .store import alpaca_bar_dict
 from .tf import alpaca_tf
 from .universe import DEFAULT_CRYPTO, equity_universe, is_crypto
@@ -58,7 +59,8 @@ async def _equity_pass(stock_client, symbols, timeframe, start, feed, batch, *, 
         try:
             req = StockBarsRequest(symbol_or_symbols=chunk, timeframe=alpaca_tf(timeframe),
                                    start=start, feed=feed)
-            barset = await asyncio.to_thread(stock_client.get_stock_bars, req)
+            barset = await call_rest(stock_client.get_stock_bars, req,
+                                     timeout=get_settings().ingest_rest_timeout_s)
             total += await _persist(barset, timeframe, archive=archive)
         except Exception as e:  # noqa: BLE001
             log.warning("equity backfill %s chunk failed: %s", timeframe, e)
@@ -72,7 +74,8 @@ async def _crypto_pass(crypto_client, symbols, timeframe, start, *, archive):
     try:
         req = CryptoBarsRequest(symbol_or_symbols=symbols, timeframe=alpaca_tf(timeframe),
                                 start=start)
-        barset = await asyncio.to_thread(crypto_client.get_crypto_bars, req)
+        barset = await call_rest(crypto_client.get_crypto_bars, req,
+                                 timeout=get_settings().ingest_rest_timeout_s)
         return await _persist(barset, timeframe, archive=archive)
     except Exception as e:  # noqa: BLE001
         log.warning("crypto backfill %s failed: %s", timeframe, e)
@@ -86,8 +89,10 @@ async def run(*, archive: bool = True, days_override: int | None = None) -> None
     settings = get_settings()
     equities = list(equity_universe(settings.price_universe))
     now = datetime.now(timezone.utc)
-    stock_client = StockHistoricalDataClient(settings.alpaca_api_key, settings.alpaca_api_secret)
-    crypto_client = CryptoHistoricalDataClient()
+    stock_client = inject_timeout(
+        StockHistoricalDataClient(settings.alpaca_api_key, settings.alpaca_api_secret),
+        settings.ingest_rest_timeout_s)
+    crypto_client = inject_timeout(CryptoHistoricalDataClient(), settings.ingest_rest_timeout_s)
 
     for timeframe, days in settings.backfill_days.items():
         start = now - timedelta(days=days_override if days_override is not None else days)
