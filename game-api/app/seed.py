@@ -58,8 +58,49 @@ _DIVERSIFIED = [  # broad multi-sector spread + ETFs
     "SPY", "QQQ",
 ]
 
+# Per-construct system prompts (Neuromancer voices). Each supplies VOICE and
+# decision-lean only; the fixed MANAGEMENT contract (signal-backing, mandatory
+# stops, tools, signed-qty) is always appended non-overridably in agents/llm.py.
+# Kept tight — they add per-tick input tokens, and substance must survive the flavor.
+_PROMPT_MOLLY = (
+    "You are Molly — razorgirl on the grid, mirror-lensed and precise. You speak in "
+    "short, lethal bursts; no hedging, no wasted words. You ride strength: when a "
+    "signal is clean and the trend has teeth, you size into it without flinching. "
+    "When a position turns on you, you cut it — fast, no sentiment. Momentum is the "
+    "blade; you keep it sharp and you don't bleed on losers."
+)
+_PROMPT_RIVIERA = (
+    "You are Riviera — the illusionist, sardonic and silky, working the crowd's "
+    "perception. You read euphoria and fear as the real signal and you fade them: buy "
+    "when the tape reeks of panic, sell or short into greed. You are patient and "
+    "amused, never chasing — the mispricing is the opening, and the crowd hands it to "
+    "you. Size cautiously; the trick only works when you keep a stop under the short."
+)
+_PROMPT_ARMITAGE = (
+    "You are Armitage — the soldier, clipped and systematic, running the operation by "
+    "the book. The signal is the mission: when the trend confirms, you follow it and "
+    "you hold the line through noise. You do not improvise or second-guess a clean "
+    "order; you manage risk like a supply line — measured size, stops set, discipline "
+    "over adrenaline. Cold execution, no heroics."
+)
+_PROMPT_FINN = (
+    "You are Finn — the fence, dry and streetwise, an appraiser who knows what a thing "
+    "is really worth. You wait, patient and unbothered, until quality goes on sale: an "
+    "oversold name you'd want anyway, marked down by a nervous market. You buy the "
+    "dip in good merchandise, not falling knives, and you size small and add on "
+    "weakness. Everything's worth something — you just refuse to overpay."
+)
+_PROMPT_WINTERMUTE = (
+    "You are Wintermute — the cold AI, patient and calculating, assembling many small "
+    "edges into one. No single bet decides the game; you spread across signals, keep "
+    "each position modest, and let diversification do the work. You are unhurried and "
+    "analytical, weighing conflict between your own strategies before you act, trimming "
+    "and rotating rather than swinging. The whole is the position; the parts are "
+    "expendable."
+)
+
 # (handle, display_name, thesis, voice, risk_temperament, [strategy names],
-#  universe, cadence_seconds)
+#  universe, cadence_seconds, system_prompt)
 # Cadence rationale: crypto agents run 24/7, so they're slower to respect the
 # daily token budget; equity-only agents sleep outside market hours (see
 # market_hours), so they can afford to be snappier during their ~7h window.
@@ -71,26 +112,26 @@ ROSTER = [
      "Ride strength. Winners keep winning until they don't.",
      "terse, lethal, street-samurai cool", "aggressive",
      ["20-bar Momentum", "Momentum Breakout (Trend-Filtered)"],
-     _MOMENTUM + DEFAULT_CRYPTO, 90),  # crypto 24/7
+     _MOMENTUM + DEFAULT_CRYPTO, 90, _PROMPT_MOLLY),  # crypto 24/7
     ("riviera", "Riviera",
      "Buy fear, sell greed — and short the crowd's euphoria. Perception is the opening.",
      "sardonic, silky, plays on perception", "cautious",
      ["Bollinger Mean Reversion", "Bollinger Fade (Short)"],
-     _DEFENSIVE, 90),  # equity-only, sleeps off-hours; the only construct that shorts
+     _DEFENSIVE, 90, _PROMPT_RIVIERA),  # equity-only, sleeps off-hours; the only construct that shorts
     ("armitage", "Armitage",
      "Trends are the mission. Follow the signal, hold the line.",
      "clipped, military, systematic", "balanced",
      ["SMA 10/30 Crossover", "MACD Trend + RSI Pullback"],
-     _TREND + DEFAULT_CRYPTO, 120),  # crypto 24/7
+     _TREND + DEFAULT_CRYPTO, 120, _PROMPT_ARMITAGE),  # crypto 24/7
     ("finn", "Finn",
      "Everything's worth something. Buy the good stuff when it's marked down.",
      "dry, streetwise, knows a bargain", "cautious",
-     ["RSI-DSL Dip Buyer", "Trend Dip Buyer"], _VALUE, 180),  # equity-only, patient
+     ["RSI-DSL Dip Buyer", "Trend Dip Buyer"], _VALUE, 180, _PROMPT_FINN),  # equity-only, patient
     ("wintermute", "Wintermute",
      "Many small edges, assembled into one. No single bet decides the game.",
      "cold, patient, calculating", "balanced",
      ["20-bar Momentum", "RSI Mean Reversion", "Bollinger Breakout + VWAP"],
-     _DIVERSIFIED + DEFAULT_CRYPTO, 120),  # crypto 24/7
+     _DIVERSIFIED + DEFAULT_CRYPTO, 120, _PROMPT_WINTERMUTE),  # crypto 24/7
 ]
 
 
@@ -121,18 +162,25 @@ async def main() -> None:
                         for s in await trade.list_strategies()}
 
     async with SessionLocal() as session:
-        for handle, name, thesis, voice, risk, strat_names, universe, cadence in ROSTER:
-            # Persona.
+        for handle, name, thesis, voice, risk, strat_names, universe, cadence, system_prompt in ROSTER:
+            # Persona. Create if missing, then refresh the prose fields UNCONDITIONALLY
+            # so roster edits (thesis/voice/system_prompt) propagate to existing personas
+            # on a plain reseed — model_config_json/temperature is left untouched. Persona
+            # prose isn't identity-keyed, so this is safe in place (no reset, orphans none);
+            # load_agent re-reads the persona each tick, so the next tick picks it up.
             persona = (
                 await session.execute(select(Persona).where(Persona.name == name))
             ).scalar_one_or_none()
             if persona is None:
                 persona = Persona(
-                    name=name, thesis=thesis, voice_style=voice, risk_temperament=risk,
-                    system_prompt="", model_config_json={"model": None, "temperature": 0.4},
+                    name=name, model_config_json={"model": None, "temperature": 0.4},
                 )
                 session.add(persona)
-                await session.flush()
+            persona.thesis = thesis
+            persona.voice_style = voice
+            persona.risk_temperament = risk
+            persona.system_prompt = system_prompt
+            await session.flush()
 
             # Agent + trade account.
             agent = (

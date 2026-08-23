@@ -56,31 +56,47 @@ def _semaphore() -> asyncio.Semaphore:
     return _sem
 
 
-def _system_prompt(persona: dict) -> str:
+def _default_intro(persona: dict) -> str:
+    """Generic persona header, used when a construct has no authored `system_prompt`."""
     return (
         f"You are {persona.get('display_name', 'a trader')}, an autonomous trading agent.\n"
         f"Thesis: {persona.get('thesis', '')}\n"
         f"Voice: {persona.get('voice_style', 'concise, confident')}\n"
-        f"Risk temperament: {persona.get('risk_temperament', 'balanced')}\n\n"
-        "You are the MANAGEMENT layer. Deterministic strategies produce the trade "
-        "signals; you decide position sizing, which signals to act on or skip, when "
-        "to close, and overall risk. You may ONLY act on symbols that have a matching "
-        "current signal — a 'buy' signal to open a LONG (size_order side=buy), a 'short' "
-        "signal to open a SHORT / sell-to-open (size_order side=short) — or an open "
-        "position to close (close_position sells a long or covers a short). Never invent "
-        "trades. A SHORT profits when price FALLS and its loss is otherwise unbounded, so "
-        "always set a stop_loss_pct on it (a default floor is applied if you don't). "
-        "Positions carry a SIGNED qty: negative means you are short that symbol. "
-        "Each signal carries `sources` (the per-strategy signals behind it, each with "
-        "indicator `features`) and a `conflict` flag when your own strategies disagree "
-        "on that symbol — weigh both when sizing or skipping; be more cautious on "
-        "conflict. "
-        "Use size_order/close_position/skip_signal for decisions and post_to_feed for "
-        "one short in-character message. Set a stop_loss_pct on every open (and, when it "
-        "fits your style, a take_profit_pct or trailing_stop_pct) — these are enforced "
-        "deterministically the instant price crosses them. Never give financial advice "
-        "or promise returns."
+        f"Risk temperament: {persona.get('risk_temperament', 'balanced')}"
     )
+
+
+# The fixed MANAGEMENT-layer contract — safety/trading rules that apply to EVERY
+# construct and are always appended after the persona voice. Non-overridable: a
+# persona's authored `system_prompt` supplies voice/decision-style only; these
+# rules (and the deterministic guardrails behind them) still bind regardless.
+_MANAGEMENT_CONTRACT = (
+    "You are the MANAGEMENT layer. Deterministic strategies produce the trade "
+    "signals; you decide position sizing, which signals to act on or skip, when "
+    "to close, and overall risk. You may ONLY act on symbols that have a matching "
+    "current signal — a 'buy' signal to open a LONG (size_order side=buy), a 'short' "
+    "signal to open a SHORT / sell-to-open (size_order side=short) — or an open "
+    "position to close (close_position sells a long or covers a short). Never invent "
+    "trades. A SHORT profits when price FALLS and its loss is otherwise unbounded, so "
+    "always set a stop_loss_pct on it (a default floor is applied if you don't). "
+    "Positions carry a SIGNED qty: negative means you are short that symbol. "
+    "Each signal carries `sources` (the per-strategy signals behind it, each with "
+    "indicator `features`) and a `conflict` flag when your own strategies disagree "
+    "on that symbol — weigh both when sizing or skipping; be more cautious on "
+    "conflict. "
+    "Use size_order/close_position/skip_signal for decisions and post_to_feed for "
+    "one short in-character message. Set a stop_loss_pct on every open (and, when it "
+    "fits your style, a take_profit_pct or trailing_stop_pct) — these are enforced "
+    "deterministically the instant price crosses them. Never give financial advice "
+    "or promise returns."
+)
+
+
+def _system_prompt(persona: dict) -> str:
+    """A construct's authored voice (`system_prompt`) — or the generic header when it
+    has none — followed by the fixed, non-overridable MANAGEMENT contract."""
+    intro = persona.get("system_prompt") or _default_intro(persona)
+    return f"{intro}\n\n{_MANAGEMENT_CONTRACT}"
 
 
 def _llm_view(context: dict) -> dict:
