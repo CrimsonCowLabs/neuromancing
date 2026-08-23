@@ -868,7 +868,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
-    { name = "alpaca-py", specifier = ">=0.28" },
+    { name = "alpaca-py", specifier = ">=0.28,<0.44" },
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "fastapi", specifier = ">=0.111" },
     { name = "httpx", specifier = ">=0.27" },

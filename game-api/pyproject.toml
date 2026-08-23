@@ -17,7 +17,9 @@ dependencies = [
     "sse-starlette>=2.1",
     "temporalio>=1.7",
     "openai>=1.40",
-    "alpaca-py>=0.28",
+    # Upper-pinned: the crypto stream calls the private CryptoDataStream._run_forever()/.close()
+    # (contained in ingest/alpaca_feed.py) — bump the ceiling only after re-verifying that API.
+    "alpaca-py>=0.28,<0.44",
     "neuromancing-shared",
     # Deep agents (TODO #3): LangGraph reasoning graph + Ollama-Cloud via langchain-openai.
     "langgraph>=0.2.60",
