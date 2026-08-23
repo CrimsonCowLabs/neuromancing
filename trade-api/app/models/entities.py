@@ -260,8 +260,8 @@ class Strategy(Base):
 
 
 class StrategySignal(Base):
-    """Deterministic output the LLM management layer acts on. Also the audit
-    trail behind marketplace/[redacted]."""
+    """Deterministic output the LLM management layer acts on. Also the reproducible
+    audit trail behind each strategy's track record."""
 
     __tablename__ = "strategy_signal"
     __table_args__ = (

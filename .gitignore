@@ -50,5 +50,4 @@ deploy.sh
 docker-compose.override.yml.example
 docs/DEPLOY.md
 docs/11-operations.md
-docs/13-roadmap.md
-docs/FUNNEL.md
+docs/private/
