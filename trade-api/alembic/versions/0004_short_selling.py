@@ -28,11 +28,15 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.execute("ALTER TYPE signal_action ADD VALUE IF NOT EXISTS 'short'")
     op.execute("ALTER TYPE signal_action ADD VALUE IF NOT EXISTS 'cover'")
-    op.add_column(
-        "order",
-        sa.Column("reduce_only", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-        schema="trade",
-    )
+    # Idempotent: on a fresh DB 0001's create_all already added reduce_only (it's in the
+    # current model), so guard the add.
+    insp = sa.inspect(op.get_bind())
+    if "reduce_only" not in {c["name"] for c in insp.get_columns("order", schema="trade")}:
+        op.add_column(
+            "order",
+            sa.Column("reduce_only", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+            schema="trade",
+        )
 
 
 def downgrade() -> None:

@@ -24,10 +24,13 @@ SCHEMA = "game"
 
 
 def upgrade() -> None:
-    op.drop_index("ix_diary_open_slot", table_name="trade_diary", schema=SCHEMA)
-    op.create_index(
-        "ux_diary_open_slot", "trade_diary", ["agent_id", "symbol"], unique=True,
-        schema=SCHEMA, postgresql_where=sa.text("status = 'open'"),
+    # Idempotent: raw IF (NOT) EXISTS so `upgrade head` is clean on both fresh installs
+    # (where 0001's create_all may already carry the current model's indexes) and
+    # incrementally-migrated DBs.
+    op.execute("DROP INDEX IF EXISTS game.ix_diary_open_slot")
+    op.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_diary_open_slot ON game.trade_diary "
+        "(agent_id, symbol) WHERE status = 'open'"
     )
 
 
