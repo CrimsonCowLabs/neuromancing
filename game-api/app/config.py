@@ -104,8 +104,9 @@ class Settings(BaseServiceSettings):
 
     # ---- Deep agents / strategy evolution (TODO #3) ----
     evolution_enabled: bool = False  # off until reasoning model + keys are set
-    # Strong reasoning model for design/critique; empty -> falls back to ollama_model.
-    ollama_reasoning_model: str = ""
+    # Strong reasoning model for design/critique (Ollama Cloud; thinking + tools).
+    # Empty -> falls back to ollama_model (flash). Only fires when evolution is on.
+    ollama_reasoning_model: str = "qwen3.5:397b"
     ollama_reasoning_timeout_s: float = 120.0  # runs in the heartbeating evolve activity
     llm_daily_token_budget_evolution: int = 5_000_000
     evolution_schedule_seconds: int = 3600  # gate fires hourly; the ≥24h guard spaces runs
