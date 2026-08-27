@@ -44,7 +44,6 @@ releases/
 
 # Private / infra — kept local, NEVER published (describe the maintainer's own setup)
 Aaron-*.md
-CLAUDE.md
 deploy.sh
 .rsync-exclude
 docker-compose.override.yml.example
