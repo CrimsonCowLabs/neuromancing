@@ -206,7 +206,10 @@ async def manage(context: dict, persona: dict, handle: str = "unknown") -> dict:
     model = persona.get("model_config", {}).get("model") or pc.model
 
     if not pc.api_key:
-        return await _fallback_with_reason(context, persona, model, "no_api_key")
+        # Empty key = run headless. Distinguish the deliberate dev kill-switch from a
+        # merely-unconfigured deployment so the digest/telemetry reads honestly.
+        reason = "llm_disabled" if not get_settings().llm_enabled else "no_api_key"
+        return await _fallback_with_reason(context, persona, model, reason)
 
     # Circuit-breaker: if the daily token budget is spent, don't call the LLM.
     tripped, why = await budget.over_budget(handle)

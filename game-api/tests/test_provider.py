@@ -5,6 +5,7 @@ import app.llm.provider as provider
 
 def _settings(**over):
     base = dict(
+        llm_enabled=True,
         llm_provider="ollama", llm_base_url="", llm_api_key="",
         llm_model="", llm_reasoning_model="", llm_referer="", llm_title="",
         ollama_host="https://ollama.com/v1", ollama_api_key="",
@@ -64,3 +65,27 @@ def test_reasoner_role_uses_reasoning_model_and_timeout(monkeypatch):
     pc = provider.resolve_provider("reasoner")
     assert pc.model == "big-reasoner"
     assert pc.timeout == 120.0
+
+
+def test_llm_disabled_zeroes_the_key(monkeypatch):
+    # LLM_ENABLED=false must make the resolved key empty EVEN when a real key is set,
+    # so every deterministic-fallback path (manage(), evolve has_key() guards) fires and
+    # dev never spends a token. This is the "no LLM in dev" switch.
+    _patch(monkeypatch, _settings(llm_enabled=False, ollama_api_key="real", llm_api_key="real"))
+    assert provider.resolve_provider("manage").api_key == ""
+    assert provider.has_key() is False
+
+
+def test_llm_disabled_preserves_base_url_and_model(monkeypatch):
+    # Only the KEY is gated — transport/model still resolve, so telemetry/logs stay honest.
+    _patch(monkeypatch, _settings(llm_enabled=False, ollama_api_key="real"))
+    pc = provider.resolve_provider("manage")
+    assert pc.base_url == "https://ollama.com/v1"
+    assert pc.model == "flash-x"
+
+
+def test_llm_enabled_default_true_keeps_key(monkeypatch):
+    # Regression lock: the default (enabled) path is unchanged — a set key resolves.
+    _patch(monkeypatch, _settings(ollama_api_key="real"))
+    assert provider.resolve_provider("manage").api_key == "real"
+    assert provider.has_key() is True

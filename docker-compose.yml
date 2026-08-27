@@ -76,8 +76,9 @@ services:
       - TEMPORAL_ADDRESS=temporal:7233
       - TEMPORAL_CORS_ORIGINS=http://localhost:3000
     ports:
-      # Temporal UI on host 8101.
-      - "8101:8080"
+      # Temporal UI on host 8101 by default. A co-located dev project (-p neuromancing-dev)
+      # sets TEMPORAL_UI_HOST_PORT in its .env to avoid colliding with prod on the same box.
+      - "${TEMPORAL_UI_HOST_PORT:-8101}:8080"
 
   # ---- Application services ----
   trade-api:
@@ -149,7 +150,9 @@ services:
     depends_on:
       game-api: { condition: service_started }
     ports:
-      - "3000:3000"
+      # Host 3000 by default; a co-located dev project sets WEB_HOST_PORT (e.g. 3001) in
+      # its .env. The vps prod overlay drops this publish entirely (Caddy fronts web).
+      - "${WEB_HOST_PORT:-3000}:3000"
 
 volumes:
   pgdata:

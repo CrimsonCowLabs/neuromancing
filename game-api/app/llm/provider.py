@@ -48,7 +48,13 @@ def _base_url(s) -> str:
 
 def _api_key(s) -> str:
     """Generic LLM_API_KEY wins; else fall back to OLLAMA_API_KEY for the ollama
-    provider so deployments that only set OLLAMA_API_KEY keep working untouched."""
+    provider so deployments that only set OLLAMA_API_KEY keep working untouched.
+
+    LLM_ENABLED=false zeroes the key unconditionally — the single "no LLM in dev"
+    seam. Every consumer already treats an empty key as "run the deterministic
+    fallback" (agents/llm.py::manage, evolve has_key() guards), so no token is spent."""
+    if not s.llm_enabled:
+        return ""
     if s.llm_api_key:
         return s.llm_api_key
     if s.llm_provider == "ollama":

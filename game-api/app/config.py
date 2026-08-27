@@ -69,6 +69,10 @@ class Settings(BaseServiceSettings):
     # Anthropic is reachable THROUGH OpenRouter (no native Anthropic client here). See
     # app/llm/provider.py. The ollama_* settings below remain the ollama preset's values,
     # so a deployment that sets none of the LLM_* vars behaves exactly as before.
+    # Master kill-switch for ALL LLM calls. When false the resolved provider key is
+    # empty, so every path falls back to its deterministic manager and NO token is spent
+    # (dev sets LLM_ENABLED=false; prod keeps it true). Evolution is separately gated.
+    llm_enabled: bool = True
     llm_provider: str = "ollama"      # ollama | openrouter | local | custom
     llm_base_url: str = ""            # override the preset base_url (required for custom)
     llm_api_key: str = ""             # generic key; falls back to OLLAMA_API_KEY for ollama
