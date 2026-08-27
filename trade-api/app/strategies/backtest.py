@@ -2,100 +2,214 @@
 simple **long/flat OR short/flat** model, one position at a time. Produces reproducible
 track-record metrics.
 
-A per-side transaction cost (`DEFAULT_COST_BPS`, fees + slippage) is applied on every
-entry and exit so results are not costlessly optimistic — this materially affects which
-evolved candidates clear the adoption gate (TODO #3)."""
+The harness books every fill through the **live P&L spine** (`apply_fill` in
+`app.engine.portfolio`) — the same signed, Decimal, fee-aware, no-flip authority the
+SimBroker uses for real fills — and replays the **live exit settlement**
+(`evaluate_exit`) on each bar. So a backtest and a live position share ONE accounting:
+there is no separate hand-rolled transition math to drift from the engine, and a
+strategy that stops out live also stops out in the backtest.
+
+The adapter (`_Book`) owns only what the spine does not: **sizing** (a fixed notional
+fraction of starting cash), a **per-side cost** (`cost_bps`, applied on every entry and
+exit so churn is penalized), the **equity curve**, and the **exit replay**. Scope is
+gate-first / rank-faithful: mechanisms are modeled only when their absence changes which
+strategy the adoption gate (TODO #3) would pick — hence exit settlement and churn cost,
+but not live slippage tiers or quote-based fills.
+
+Accounting is Decimal end-to-end (matching the spine); indicator math stays float for
+speed and the O(n²) indicator recompute dominates the hot loop, so Decimal is free here.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from decimal import Decimal
+
+from neuromancing_shared.money import ZERO, D, quantize_money, quantize_qty
+
+from ..engine.matching import evaluate_exit
+from ..engine.portfolio import PositionState, apply_fill
 from .base import Bar
 from .composed import base_timeframe
 from .engine import evaluate, evaluate_multi
 
-DEFAULT_COST_BPS = 5.0  # per side (entry AND exit); ~10bps round trip
-_WARMUP = 35  # enough history for the slowest default indicator
+DEFAULT_COST_BPS = 5.0        # per side (entry AND exit); ~10bps round trip
+DEFAULT_ALLOC_PCT = 0.20      # fixed notional per entry = 20% of STARTING cash
+DEFAULT_STOP_LOSS_PCT = 0.08  # default stop applied when a caller passes no stop
+_WARMUP = 35                  # enough history for the slowest default indicator
+
+
+@dataclass(frozen=True)
+class ExitConfig:
+    """Deterministic exit discipline replayed on each bar, mirroring what a live position
+    carries. A stop is mandatory: an unset (or 0) `stop_loss_pct` defaults to
+    `DEFAULT_STOP_LOSS_PCT` so a bare backtest always measures under live-like protection —
+    a caller's own stop (tighter or looser) is honored as given. Shorts mirror automatically
+    inside `evaluate_exit` via the position's qty sign."""
+
+    stop_loss_pct: float | None = None
+    take_profit_pct: float | None = None
+    trailing_stop_pct: float | None = None
+
+    def __post_init__(self) -> None:
+        if not self.stop_loss_pct:
+            object.__setattr__(self, "stop_loss_pct", DEFAULT_STOP_LOSS_PCT)
 
 
 class _Book:
-    """Signed one-position book: qty > 0 long, < 0 short, 0 flat. Equity = cash + qty·price
-    (a short's proceeds credit cash on open; qty·price is the negative buyback liability)."""
+    """Thin adapter over the P&L spine. Holds one position at a time (long/flat OR
+    short/flat) and delegates every cash/position/realized-pnl transition to
+    `apply_fill`. Owns only sizing, per-side cost, the exit replay, and win/trade counts."""
 
-    def __init__(self, cash: float, cost: float):
-        self.cash = cash
-        self.cost = cost
-        self.qty = 0.0
-        self.entry = 0.0
+    def __init__(self, starting_cash: float, alloc_pct: float, cost_bps: float,
+                 exit_config: ExitConfig):
+        self.cash: Decimal = D(starting_cash)
+        self.pos = PositionState(ZERO, ZERO)
+        self.alloc_notional: Decimal = quantize_money(D(starting_cash) * D(alloc_pct))
+        self.cost: Decimal = D(cost_bps) / D(10000)  # per-side fraction
+        self.exit = exit_config
+        self.high_water: Decimal | None = None  # favorable extreme since entry (max long / min short)
         self.trades = 0
         self.wins = 0
 
-    def step(self, action: str, price: float) -> None:
-        c = self.cost
-        if price <= 0:
+    def equity(self, price: float) -> Decimal:
+        """Signed mark-to-market: cash + qty·price (a short's qty<0 is the buyback liability)."""
+        return self.cash + self.pos.qty * D(price)
+
+    def _fees(self, qty: Decimal, price: Decimal) -> Decimal:
+        return quantize_money(abs(qty) * price * self.cost)
+
+    def _open(self, side: str, price: float) -> None:
+        p = D(price)
+        if p <= 0:
             return
-        if action == "buy" and self.qty == 0.0:          # open long (all-in)
-            self.qty, self.entry, self.cash = (self.cash * (1 - c)) / price, price, 0.0
-            self.trades += 1
-        elif action in ("sell", "exit") and self.qty > 0.0:  # close long
-            self.cash = self.qty * price * (1 - c)
-            self.wins += 1 if price > self.entry else 0
-            self.qty = 0.0
-        elif action == "short" and self.qty == 0.0:      # open short (1x notional)
-            n = self.cash / price
-            self.cash += n * price * (1 - c)             # receive proceeds (minus cost)
-            self.qty, self.entry = -n, price
-            self.trades += 1
-        elif action == "cover" and self.qty < 0.0:       # close short
-            self.cash += self.qty * price * (1 + c)      # buy back (qty<0 → cash falls)
-            self.wins += 1 if price < self.entry else 0
-            self.qty = 0.0
+        notional = self.alloc_notional
+        if side == "buy":  # a long spends cash — never book what a drawdown can't afford
+            notional = min(notional, self.cash)
+        if notional <= 0:
+            return
+        qty = quantize_qty(notional / p)
+        if qty <= 0:
+            return
+        out = apply_fill(cash=self.cash, position=self.pos, side=side, qty=qty,
+                         price=p, fees=self._fees(qty, p))
+        self.cash, self.pos = out.cash, out.position
+        self.high_water = p
+        self.trades += 1
 
-    def equity(self, price: float) -> float:
-        return self.cash + self.qty * price
+    def _close(self, price: float) -> None:
+        p = D(price)
+        qty = self.pos.qty
+        if qty == 0 or p <= 0:
+            return
+        side = "sell" if qty > 0 else "buy"  # close long / cover short
+        out = apply_fill(cash=self.cash, position=self.pos, side=side, qty=abs(qty),
+                         price=p, fees=self._fees(qty, p))
+        self.cash, self.pos = out.cash, out.position
+        self.wins += 1 if out.realized_pnl > 0 else 0  # spine's realized sign — fee/short aware
+        self.high_water = None
+
+    def settle_exit(self, price: float) -> None:
+        """Exit-first: replay the live stop/take-profit/trailing decision against the open
+        position BEFORE the strategy signal, so a position a live stop would already have
+        closed cannot be rescued by a later signal on the same bar. Threads the ratcheted
+        high-water across bars."""
+        if self.pos.qty == 0:
+            return
+        d = evaluate_exit(
+            avg_entry=self.pos.avg_entry, last=price, qty=self.pos.qty,
+            high_water=self.high_water,
+            stop_loss_pct=self.exit.stop_loss_pct,
+            take_profit_pct=self.exit.take_profit_pct,
+            trailing_stop_pct=self.exit.trailing_stop_pct,
+        )
+        self.high_water = d.high_water
+        if d.should_exit:
+            self._close(price)
+
+    def step(self, action: str, price: float) -> None:
+        """Apply a strategy signal under the one-position model. Only `buy` opens a long,
+        only `short` opens a short; a bare `sell` while flat is a no-op (never a flip)."""
+        qty = self.pos.qty
+        if action == "buy" and qty == 0:
+            self._open("buy", price)
+        elif action in ("sell", "exit") and qty > 0:
+            self._close(price)
+        elif action == "short" and qty == 0:
+            self._open("sell", price)
+        elif action == "cover" and qty < 0:
+            self._close(price)
 
 
-def _metrics(book: _Book, curve: list[float], n_bars: int, starting_cash: float) -> dict:
-    peak, max_dd = starting_cash, 0.0
+def _metrics(book: _Book, curve: list[Decimal], n_bars: int, starting_cash: Decimal) -> dict:
+    peak, max_dd = starting_cash, ZERO
     for e in curve:
-        peak = max(peak, e)
+        if e > peak:
+            peak = e
         if peak > 0:
-            max_dd = max(max_dd, (peak - e) / peak)
+            dd = (peak - e) / peak
+            if dd > max_dd:
+                max_dd = dd
     final = curve[-1] if curve else starting_cash
     return {
-        "bars": n_bars, "trades": book.trades,
+        "bars": n_bars,
+        "trades": book.trades,
         "win_rate": (book.wins / book.trades) if book.trades else 0.0,
-        "total_return": (final - starting_cash) / starting_cash,
-        "max_drawdown": max_dd, "final_equity": final,
+        "total_return": float((final - starting_cash) / starting_cash),
+        "max_drawdown": float(max_dd),
+        "final_equity": float(final),
     }
 
 
-def backtest(kind: str, spec: dict, bars: list[Bar], starting_cash: float = 10000.0,
-             cost_bps: float = DEFAULT_COST_BPS) -> dict:
-    book = _Book(starting_cash, cost_bps / 10000.0)
-    curve: list[float] = []
-    for i in range(1, len(bars) + 1):
-        price = bars[i - 1].close
-        if i >= _WARMUP:
-            book.step(evaluate(kind, spec, bars[:i]).action, price)
+def _replay(n_bars: int, price_at, action_at, *, starting_cash: float, alloc_pct: float,
+            cost_bps: float, exit_config: ExitConfig) -> dict:
+    """Shared accounting + exit-replay loop for the single- and multi-timeframe paths, so a
+    multi-tf strategy and a single-tf strategy are booked identically. `price_at(i)` gives
+    the bar-i close; `action_at(i)` gives the strategy action for bar i (None during warmup)."""
+    book = _Book(starting_cash, alloc_pct, cost_bps, exit_config)
+    curve: list[Decimal] = []
+    for i in range(n_bars):
+        price = price_at(i)
+        book.settle_exit(price)          # exit-first, before the signal
+        action = action_at(i)
+        if action is not None:
+            book.step(action, price)
         curve.append(book.equity(price))
-    return _metrics(book, curve, len(bars), starting_cash)
+    return _metrics(book, curve, n_bars, D(starting_cash))
 
 
-def backtest_multi(
-    kind: str, spec: dict, bars_by_tf: dict[str, list[Bar]], starting_cash: float = 10000.0,
-    cost_bps: float = DEFAULT_COST_BPS,
-) -> dict:
+def backtest(kind: str, spec: dict, bars: list[Bar], starting_cash: float = 10000.0, *,
+             alloc_pct: float = DEFAULT_ALLOC_PCT, cost_bps: float = DEFAULT_COST_BPS,
+             exit_config: ExitConfig | None = None) -> dict:
+    ec = exit_config or ExitConfig()
+
+    def action_at(i: int) -> str | None:
+        return evaluate(kind, spec, bars[: i + 1]).action if i + 1 >= _WARMUP else None
+
+    return _replay(len(bars), lambda i: bars[i].close, action_at,
+                   starting_cash=starting_cash, alloc_pct=alloc_pct, cost_bps=cost_bps,
+                   exit_config=ec)
+
+
+def backtest_multi(kind: str, spec: dict, bars_by_tf: dict[str, list[Bar]],
+                   starting_cash: float = 10000.0, *, alloc_pct: float = DEFAULT_ALLOC_PCT,
+                   cost_bps: float = DEFAULT_COST_BPS,
+                   exit_config: ExitConfig | None = None) -> dict:
     """Multi-timeframe backtest for indicator_dsl. Steps 'now' through the BASE timeframe
     only; higher-timeframe series are passed in full and the composed evaluator's as-of
-    filter drops any bar not yet closed — so there is NO lookahead. Same signed model."""
+    filter drops any bar not yet closed — so there is NO lookahead. Shares the exact
+    accounting + exit-replay of `backtest` via `_replay`."""
+    ec = exit_config or ExitConfig()
     base_tf = base_timeframe(spec)
     base = bars_by_tf.get(base_tf) or []
     higher = {tf: bb for tf, bb in bars_by_tf.items() if tf != base_tf}
-    book = _Book(starting_cash, cost_bps / 10000.0)
-    curve: list[float] = []
-    for i in range(1, len(base) + 1):
-        price = base[i - 1].close
-        if i >= _WARMUP:
-            window = {base_tf: base[:i], **higher}  # higher tfs filtered as-of by composed
-            book.step(evaluate_multi(kind, spec, window).action, price)
-        curve.append(book.equity(price))
-    return _metrics(book, curve, len(base), starting_cash)
+
+    def action_at(i: int) -> str | None:
+        if i + 1 < _WARMUP:
+            return None
+        window = {base_tf: base[: i + 1], **higher}  # higher tfs filtered as-of by composed
+        return evaluate_multi(kind, spec, window).action
+
+    return _replay(len(base), lambda i: base[i].close, action_at,
+                   starting_cash=starting_cash, alloc_pct=alloc_pct, cost_bps=cost_bps,
+                   exit_config=ec)

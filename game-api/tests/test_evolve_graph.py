@@ -33,15 +33,17 @@ class _FakeTrade:
 
     def __init__(self, cand_return=0.10, inc_return=0.005):
         self.cand_return, self.inc_return = cand_return, inc_return
+        self.calls: list[dict] = []  # every backtest_spec kwargs bag, for threading assertions
 
     async def backtest_spec(self, spec, symbol, *, kind="indicator_dsl", window=None,
-                            starting_cash=10000.0):
+                            starting_cash=10000.0, **knobs):
+        self.calls.append(knobs)
         period = spec["indicators"][0].get("period")
         ret = self.inc_return if period == 14 else self.cand_return
         return {"total_return": ret, "trades": 8, "max_drawdown": 0.1}
 
 
-async def _run(trade):
+async def _run(trade, risk_profile=None):
     async def fake_digest(session, agent_id, since_days=30):
         return {"episodes": 20, "win_rate": 0.4, "avg_return": -0.001}
 
@@ -52,7 +54,7 @@ async def _run(trade):
     try:
         ctx = {"session_factory": _fake_session_factory, "trade": trade, "settings": None,
                "now": datetime(2026, 3, 3, tzinfo=timezone.utc), "backtest_symbols": 2,
-               "cfg": GateConfig(0.02, 5, 0.4)}
+               "cfg": GateConfig(0.02, 5, 0.4), "risk_profile": risk_profile or {}}
         g = G.build_graph(ctx, MemorySaver())
         initial = {"run_id": "t1", "agent_id": 1, "universe": ["AAPL", "MSFT"],
                    "incumbent_spec": INCUMBENT, "refine_count": 0, "dry_run": True}
@@ -78,6 +80,21 @@ async def test_graph_rejects_when_no_edge():
     final = await _run(_FakeTrade(cand_return=0.006, inc_return=0.005))
     assert final["decision"] == "rejected"
     assert final["adopted_spec"] is None
+
+
+async def test_risk_profile_threads_into_backtest_knobs():
+    # A construct's own risk profile must reach every backtest call so candidates are
+    # measured under the discipline they'd trade under (max_position_pct → alloc_pct,
+    # stop/take-profit passed through; absent keys are dropped, not sent as None).
+    trade = _FakeTrade(cand_return=0.10, inc_return=0.005)
+    await _run(trade, risk_profile={"max_position_pct": 0.15, "stop_loss_pct": 0.05,
+                                    "take_profit_pct": 0.12})
+    assert trade.calls, "backtest_spec was never called"
+    for knobs in trade.calls:
+        assert knobs["alloc_pct"] == 0.15
+        assert knobs["stop_loss_pct"] == 0.05
+        assert knobs["take_profit_pct"] == 0.12
+        assert "trailing_stop_pct" not in knobs  # absent in the profile → not sent
 
 
 def test_heuristic_variants_are_valid_and_varied():

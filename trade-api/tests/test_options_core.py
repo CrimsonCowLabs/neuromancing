@@ -133,13 +133,28 @@ def test_strike_for_delta_inverts():
 
 # ── short/flat backtest replay (Phase 2) ──
 def test_short_strategy_backtests_short_flat():
-    from app.strategies.backtest import _Book
+    """A short that opens on an overbought crossing and covers lower banks a win — asserted
+    through the backtest seam (the signed open/cover accounting itself is property-tested in
+    test_portfolio, and the exit replay in test_exits). The short covers at its take-profit
+    (stop loosened so the post-entry rise doesn't stop it out first)."""
+    from datetime import datetime, timedelta, timezone
 
-    # Short at 100, cover at 90 -> profit; the signed book credits proceeds on open.
-    b = _Book(cash=10000.0, cost=0.0)
-    b.step("short", 100.0)
-    assert b.qty < 0 and b.trades == 1
-    assert b.equity(100.0) == 10000.0        # equity unchanged at open (no cost)
-    b.step("cover", 90.0)
-    assert b.qty == 0.0 and b.wins == 1
-    assert b.equity(90.0) > 10000.0          # profited on the decline
+    from app.strategies.backtest import ExitConfig, backtest_multi
+    from app.strategies.base import Bar
+    from app.strategies.spec import validate_spec
+
+    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    spec = validate_spec({
+        "base_timeframe": "5m",
+        "indicators": [{"id": "r", "fn": "rsi", "period": 14, "timeframe": "5m"}],
+        "short_when": {"all": [{"indicator": "r", "cross": "above", "value": 65}]},
+    })
+    # decline (RSI low) → sharp rally that crosses RSI up through 65 (opens a short) → a
+    # deep decline that carries price below the short's take-profit target.
+    closes = [120 - i for i in range(45)] + [76 + i * 3 for i in range(8)] + [100 - i * 2 for i in range(40)]
+    bars = {"5m": [Bar(ts=t0 + timedelta(minutes=5 * i), open=c, high=c, low=c, close=c, volume=1)
+                   for i, c in enumerate(closes)]}
+    r = backtest_multi("indicator_dsl", spec, bars, cost_bps=0.0,
+                       exit_config=ExitConfig(stop_loss_pct=0.90, take_profit_pct=0.08))
+    assert r["trades"] == 1 and r["win_rate"] == 1.0        # short opened and covered lower
+    assert r["final_equity"] > 10000.0                      # profited on the decline

@@ -104,11 +104,21 @@ class TradeClient:
     async def backtest_spec(
         self, spec: dict, symbol: str, *, kind: str = "indicator_dsl",
         starting_cash: float = 10000.0, window: tuple | None = None,
+        alloc_pct: float | None = None, cost_bps: float | None = None,
+        stop_loss_pct: float | None = None, take_profit_pct: float | None = None,
+        trailing_stop_pct: float | None = None,
     ) -> dict:
         """Ad-hoc backtest of an unpersisted spec (deep-agent iteration). `window` is
-        an optional (start, end) of ISO strings/datetimes for walk-forward."""
+        an optional (start, end) of ISO strings/datetimes for walk-forward. The sizing /
+        cost / exit knobs let the evolution gate measure a candidate under the construct's
+        own risk profile; omitted knobs fall back to the harness's live-like defaults."""
         body: dict = {"kind": kind, "spec": spec, "symbol": symbol,
                       "starting_cash": starting_cash}
+        for key, val in (("alloc_pct", alloc_pct), ("cost_bps", cost_bps),
+                         ("stop_loss_pct", stop_loss_pct), ("take_profit_pct", take_profit_pct),
+                         ("trailing_stop_pct", trailing_stop_pct)):
+            if val is not None:
+                body[key] = val
         if window is not None:
             s, e = window
             body["window"] = {"start": s.isoformat() if hasattr(s, "isoformat") else s,

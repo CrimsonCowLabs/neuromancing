@@ -125,7 +125,8 @@ async def _evolve_one(agent, all_strats, settings, now, closed_today, run_id, cp
     cfg = GateConfig(settings.evolution_return_margin, settings.evolution_min_trades,
                      settings.evolution_max_dd)
     ctx = {"session_factory": SessionLocal, "trade": trade, "settings": settings,
-           "now": now, "backtest_symbols": settings.evolution_backtest_symbols, "cfg": cfg}
+           "now": now, "backtest_symbols": settings.evolution_backtest_symbols, "cfg": cfg,
+           "risk_profile": agent.get("risk_profile") or {}}
     initial = {"run_id": run_id, "agent_id": agent["id"], "universe": universe,
                "incumbent_spec": incumbent["spec"], "refine_count": 0,
                "dry_run": not settings.evolution_enabled}
@@ -180,6 +181,7 @@ async def run_evolution_cycle() -> dict:
             select(Agent).where(Agent.status == AgentStatus.active))).scalars().all()
         agents = [{"id": a.id, "handle": a.handle, "account_ref": a.account_ref,
                    "universe": list(a.tradable_universe or []),
+                   "risk_profile": dict(a.risk_profile or {}),
                    "strategy_ids": list(a.strategy_ids or [])} for a in rows]
 
     all_strats = await trade.list_strategies()  # hoisted: fetched once, not per agent

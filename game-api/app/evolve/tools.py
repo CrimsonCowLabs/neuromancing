@@ -86,16 +86,32 @@ def walk_forward_windows(spec: dict, now: datetime) -> list[tuple[datetime, date
     return [w1, w2]
 
 
-async def backtest_candidate(trade, spec: dict, symbols: list[str], now: datetime) -> dict:
-    """Backtest a candidate over the two walk-forward windows × sampled symbols; return
-    aggregate metrics per window: {"w1": {...}, "w2": {...}}."""
+def _risk_knobs(risk_profile: dict | None) -> dict:
+    """Map a construct's free-form risk profile to the backtest's sizing/exit knobs so a
+    candidate is measured under the exact discipline it would trade under. Absent keys are
+    dropped → the harness applies its live-like defaults (0.20 alloc, mandatory 0.08 stop)."""
+    rp = risk_profile or {}
+    knobs = {
+        "alloc_pct": rp.get("max_position_pct"),
+        "stop_loss_pct": rp.get("stop_loss_pct"),
+        "take_profit_pct": rp.get("take_profit_pct"),
+        "trailing_stop_pct": rp.get("trailing_stop_pct"),
+    }
+    return {k: v for k, v in knobs.items() if v is not None}
+
+
+async def backtest_candidate(trade, spec: dict, symbols: list[str], now: datetime,
+                             risk_profile: dict | None = None) -> dict:
+    """Backtest a candidate over the two walk-forward windows × sampled symbols under the
+    construct's own risk profile; return aggregate metrics per window: {"w1": {...}, "w2": {...}}."""
     windows = walk_forward_windows(spec, now)
+    knobs = _risk_knobs(risk_profile)
     out: dict = {}
     for name, win in zip(("w1", "w2"), windows):
         rets, trades, dds = [], 0, []
         for sym in symbols:
             try:
-                m = await trade.backtest_spec(spec, sym, kind="indicator_dsl", window=win)
+                m = await trade.backtest_spec(spec, sym, kind="indicator_dsl", window=win, **knobs)
             except Exception:  # noqa: BLE001 — a thin symbol / no bars just contributes nothing
                 continue
             rets.append(float(m.get("total_return", 0.0)))

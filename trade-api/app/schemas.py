@@ -158,11 +158,24 @@ class SignalOut(BaseModel):
     features: dict
 
 
-class BacktestRequest(BaseModel):
+class _BacktestParams(BaseModel):
+    """Sizing / cost / exit knobs shared by both backtest requests. All optional so
+    existing callers are unchanged; the harness falls back to its live-like defaults
+    (0.20 alloc, 5bps/side, a mandatory 0.08 stop) when a field is omitted. The
+    evolution gate fills these from a construct's own risk profile so a candidate is
+    measured under the exact sizing + exit discipline it would trade under."""
+    starting_cash: float = 10000.0
+    alloc_pct: float | None = None       # fixed notional fraction of starting cash per entry
+    cost_bps: float | None = None        # per-side transaction cost
+    stop_loss_pct: float | None = None   # unset → the harness's mandatory 0.08 default stop
+    take_profit_pct: float | None = None
+    trailing_stop_pct: float | None = None
+
+
+class BacktestRequest(_BacktestParams):
     symbol: str
     timeframe: str = "1m"
     limit: int = 1000
-    starting_cash: float = 10000.0
 
 
 class BacktestWindow(BaseModel):
@@ -170,12 +183,11 @@ class BacktestWindow(BaseModel):
     end: datetime
 
 
-class AdhocBacktestRequest(BaseModel):
+class AdhocBacktestRequest(_BacktestParams):
     """Backtest an ad-hoc spec WITHOUT persisting it (deep-agent iteration, TODO #3)."""
     kind: str = "indicator_dsl"
     spec: dict
     symbol: str
-    starting_cash: float = 10000.0
     window: BacktestWindow | None = None  # calendar span for walk-forward
 
 

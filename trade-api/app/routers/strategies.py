@@ -32,7 +32,7 @@ from ..schemas import (
 )
 from ..security import require_service_token
 from ..strategies import evaluate
-from ..strategies.backtest import backtest, backtest_multi
+from ..strategies.backtest import DEFAULT_ALLOC_PCT, DEFAULT_COST_BPS, ExitConfig, backtest, backtest_multi
 from ..strategies.composed import required_timeframes
 from ..strategies.data import load_bars
 from ..strategies.engine import evaluate_multi, list_house_strategies
@@ -41,6 +41,20 @@ from ..strategies.options_backtest import RV_WINDOW, backtest_structure
 from ..strategies.spec import validate_spec
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
+
+
+def _bt_kwargs(body: AdhocBacktestRequest | BacktestRequest) -> dict:
+    """Turn a backtest request's optional sizing/cost/exit fields into keyword args for
+    `backtest` / `backtest_multi`, applying the harness defaults for anything omitted."""
+    return {
+        "alloc_pct": body.alloc_pct if body.alloc_pct is not None else DEFAULT_ALLOC_PCT,
+        "cost_bps": body.cost_bps if body.cost_bps is not None else DEFAULT_COST_BPS,
+        "exit_config": ExitConfig(
+            stop_loss_pct=body.stop_loss_pct,
+            take_profit_pct=body.take_profit_pct,
+            trailing_stop_pct=body.trailing_stop_pct,
+        ),
+    }
 
 
 def _validate_for_kind(kind: str, spec: dict) -> dict:
@@ -208,12 +222,12 @@ async def backtest_adhoc(
                 bars_by_tf[tf] = bb
         if not bars_by_tf:
             raise HTTPException(400, "no bars for symbol/window")
-        metrics = backtest_multi(body.kind, spec, bars_by_tf, body.starting_cash)
+        metrics = backtest_multi(body.kind, spec, bars_by_tf, body.starting_cash, **_bt_kwargs(body))
     else:
         bars = await load_bars(session, body.symbol, "1m", 5000, window=window)
         if not bars:
             raise HTTPException(400, "no bars for symbol/window")
-        metrics = backtest(body.kind, spec, bars, body.starting_cash)
+        metrics = backtest(body.kind, spec, bars, body.starting_cash, **_bt_kwargs(body))
     return BacktestResult(symbol=body.symbol, **metrics)
 
 
@@ -275,10 +289,11 @@ async def backtest_strategy(
                 bars_by_tf[tf] = bb
         if not bars_by_tf:
             raise HTTPException(400, "no bars for symbol")
-        metrics = backtest_multi(strat.kind.value, strat.spec, bars_by_tf, body.starting_cash)
+        metrics = backtest_multi(strat.kind.value, strat.spec, bars_by_tf, body.starting_cash,
+                                 **_bt_kwargs(body))
     else:
         bars = await load_bars(session, body.symbol, body.timeframe, body.limit)
         if not bars:
             raise HTTPException(400, "no bars for symbol")
-        metrics = backtest(strat.kind.value, strat.spec, bars, body.starting_cash)
+        metrics = backtest(strat.kind.value, strat.spec, bars, body.starting_cash, **_bt_kwargs(body))
     return BacktestResult(symbol=body.symbol, **metrics)

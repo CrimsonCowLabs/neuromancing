@@ -186,13 +186,15 @@ def build_graph(ctx: dict, checkpointer):
             return {"backtests": {}, "best_idx": -1}
         syms = list(state["universe"])[: ctx["backtest_symbols"]]
         now = ctx["now"]
+        rp = ctx.get("risk_profile")  # measure every candidate under the construct's own discipline
         inc_metrics = state.get("incumbent_metrics")
         if inc_metrics is None and state.get("incumbent_spec"):
-            inc_metrics = await tools.backtest_candidate(ctx["trade"], state["incumbent_spec"], syms, now)
+            inc_metrics = await tools.backtest_candidate(
+                ctx["trade"], state["incumbent_spec"], syms, now, risk_profile=rp)
         bt: dict = {}
         best_idx, best_score = -1, -1e9
         for i, spec in enumerate(cands):
-            m = await tools.backtest_candidate(ctx["trade"], spec, syms, now)
+            m = await tools.backtest_candidate(ctx["trade"], spec, syms, now, risk_profile=rp)
             bt[str(i)] = m
             score = float(m.get("w1", {}).get("total_return", -9)) + float(m.get("w2", {}).get("total_return", -9))
             if score > best_score:
