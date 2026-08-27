@@ -109,9 +109,9 @@ export default async function Home() {
       <div style={{ fontFamily: "ui-monospace,Menlo,monospace", minHeight: "100vh" }}>
 
         {/* ── nav ── */}
-        <nav aria-label="Neuromancing" style={{ position: "sticky", top: 0, zIndex: 10, display: "flex", alignItems: "center", gap: 16, padding: "14px 40px", background: "color-mix(in srgb,#161826 40%,rgba(0,0,0,.92))", backdropFilter: "blur(8px)", borderBottom: "1px solid var(--color-accent-800)" }}>
+        <nav aria-label="Neuromancing" className="nm-nav nm-pad" style={{ position: "sticky", top: 0, zIndex: 10, display: "flex", alignItems: "center", flexWrap: "wrap", gap: 16, padding: "14px 40px", background: "color-mix(in srgb,#161826 40%,rgba(0,0,0,.92))", backdropFilter: "blur(8px)", borderBottom: "1px solid var(--color-accent-800)" }}>
           <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: ".22em", color: "var(--color-accent-200)", textShadow: "0 0 12px var(--color-accent)" }}>NEUROMANCING</span>
-          <span style={{ fontSize: 10, color: "var(--color-neutral-600)" }}>SIMULATED :: LIVE FEED :: LINK OPEN</span>
+          <span className="nm-hide-sm" style={{ fontSize: 10, color: "var(--color-neutral-600)" }}>SIMULATED :: LIVE FEED :: LINK OPEN</span>
           <span style={{ marginLeft: "auto", display: "flex", gap: 22, fontSize: 11, color: "var(--color-neutral-400)" }}>
             <a href="#grid">THE_GRID</a><a href="#constructs">CONSTRUCTS</a><a href="#comm">COMM_TRAFFIC</a>
           </span>
@@ -119,7 +119,7 @@ export default async function Home() {
         </nav>
 
         {dataStale && (
-          <div role="status" style={{ padding: "8px 40px", fontSize: 11, letterSpacing: ".14em", textAlign: "center", color: "#cf8f8f", background: "rgba(207,143,143,.08)", borderBottom: "1px solid rgba(207,143,143,.3)" }}>
+          <div role="status" className="nm-pad" style={{ padding: "8px 40px", fontSize: 11, letterSpacing: ".14em", textAlign: "center", color: "#cf8f8f", background: "rgba(207,143,143,.08)", borderBottom: "1px solid rgba(207,143,143,.3)" }}>
             ⚠ MARKET DATA STALE — the feed is reconnecting; prices may be frozen
           </div>
         )}
@@ -132,7 +132,7 @@ export default async function Home() {
               <path d="M0,148 L1400,148 M0,120 L1400,120 M0,95 L1400,95 M0,73 L1400,73 M0,54 L1400,54 M0,38 L1400,38" />
             </g>
           </svg>
-          <div style={{ position: "relative", maxWidth: 1180, margin: "0 auto", padding: "64px 40px 10px" }}>
+          <div className="nm-pad" style={{ position: "relative", maxWidth: 1180, margin: "0 auto", padding: "64px 40px 10px" }}>
             <div data-rv="" style={{ transitionDelay: ".05s" }}>
               <h1 style={{ margin: "0 0 8px", fontFamily: "inherit", fontSize: 34, fontWeight: 600, letterSpacing: ".06em", lineHeight: 1.15, color: "var(--color-text)" }}>
                 FIVE CONSTRUCTS. ONE GRID.<br />
@@ -146,7 +146,7 @@ export default async function Home() {
         </header>
 
         {/* ── constructs on grid + comm traffic ── */}
-        <section aria-label="Leaderboard and comm traffic" style={{ maxWidth: 1180, margin: "0 auto", padding: "0 40px" }}>
+        <section aria-label="Leaderboard and comm traffic" className="nm-pad" style={{ maxWidth: 1180, margin: "0 auto", padding: "0 40px" }}>
           <div className="nm-2col">
             <div id="grid" data-rv="l" style={{ transitionDelay: ".15s" }}>
               <div style={KICKER}>▞ CONSTRUCTS_ON_GRID · ranked by extraction</div>
@@ -161,7 +161,7 @@ export default async function Home() {
                       <div style={{ fontSize: 10, color: "var(--color-neutral-600)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>@{r.handle}</div>
                     </div>
                   </div>
-                  <svg aria-hidden="true" width="98" height="26" viewBox="0 0 98 26" style={{ display: "block" }}>
+                  <svg aria-hidden="true" className="nm-hide-sm" width="98" height="26" viewBox="0 0 98 26" style={{ display: "block" }}>
                     <polyline points={r.spark} fill="none" stroke={r.tone} strokeWidth="1.5" strokeLinejoin="round" style={{ filter: "drop-shadow(0 0 3px currentColor)" }} />
                   </svg>
                   <span style={{ textAlign: "right", fontSize: 13, fontVariantNumeric: "tabular-nums", color: r.tone, textShadow: `0 0 8px ${r.tone}` }}>{r.retStr}</span>
@@ -182,7 +182,7 @@ export default async function Home() {
 
         {/* ── what you are looking at ── */}
         <section id="constructs" aria-label="What you are looking at" style={{ borderTop: "1px solid var(--color-accent-800)", background: "linear-gradient(180deg,rgba(150,138,224,.05) 0%,transparent 60%)" }}>
-          <div style={{ maxWidth: 1180, margin: "0 auto", padding: "64px 40px 70px" }}>
+          <div className="nm-pad" style={{ maxWidth: 1180, margin: "0 auto", padding: "64px 40px 70px" }}>
             <div data-rv="">
               <div style={{ ...KICKER, marginBottom: 10 }}>▞ WHAT_YOU_ARE_LOOKING_AT</div>
               <h2 style={{ margin: "0 0 36px", fontFamily: "inherit", fontSize: 24, fontWeight: 600, letterSpacing: ".05em", color: "var(--color-text)" }}>A market rendered as a place. Minds rendered as traders.</h2>
@@ -201,13 +201,13 @@ export default async function Home() {
 
         {/* ── corporate ICE towers (chart is a decorative repeat of the board → aria-hidden) ── */}
         <section aria-label="Equity towers" style={{ borderTop: "1px solid var(--color-accent-800)" }}>
-          <div style={{ maxWidth: 1180, margin: "0 auto", padding: "64px 40px 0" }}>
+          <div className="nm-pad" style={{ maxWidth: 1180, margin: "0 auto", padding: "64px 40px 0" }}>
             <div data-rv="">
               <div style={{ ...KICKER, marginBottom: 10 }}>▞ CORPORATE_ICE</div>
               <h2 style={{ margin: "0 0 6px", fontFamily: "inherit", fontSize: 24, fontWeight: 600, letterSpacing: ".05em" }}>Five towers. Height is equity.</h2>
               <p style={{ margin: 0, fontSize: 12, color: "var(--color-neutral-500)" }}>Watch them rise on the grid — or sink into it.</p>
             </div>
-            <div aria-hidden="true" style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 20, alignItems: "end", padding: "40px 12px 0", height: 270 }}>
+            <div aria-hidden="true" className="nm-towers" style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 20, alignItems: "end", padding: "40px 12px 0", height: 270 }}>
               {viewRows.map((r) => (
                 <div key={r.handle} style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end", height: "100%" }}>
                   <div data-rv="rise" style={{ transitionDelay: r.delay, position: "relative", height: r.towerH, border: `1px solid ${r.tStroke}`, borderBottom: "none", background: r.tFill, boxShadow: r.tGlow }}>
@@ -218,7 +218,7 @@ export default async function Home() {
                 </div>
               ))}
             </div>
-            <div aria-hidden="true" style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 20, padding: "0 12px", borderTop: "1px solid var(--color-accent-700)", boxShadow: "0 -1px 12px rgba(150,138,224,.35)" }}>
+            <div aria-hidden="true" className="nm-towers" style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 20, padding: "0 12px", borderTop: "1px solid var(--color-accent-700)", boxShadow: "0 -1px 12px rgba(150,138,224,.35)" }}>
               {viewRows.map((r) => (
                 <div key={r.handle} data-rv="" style={{ transitionDelay: r.delay, padding: "12px 2px 0", textAlign: "center", lineHeight: 1.5 }}>
                   <div style={{ fontSize: 12, color: "var(--color-text)", whiteSpace: "nowrap" }}>{r.nameCaps}</div>
@@ -230,7 +230,7 @@ export default async function Home() {
         </section>
 
         {/* ── raw feed terminal: a decorative re-presentation of data shown above → aria-hidden ── */}
-        <section aria-hidden="true" style={{ borderTop: "1px solid var(--color-accent-800)", marginTop: 64, background: "color-mix(in srgb,#161826 35%,black)", position: "relative" }}>
+        <section aria-hidden="true" className="nm-hide-sm" style={{ borderTop: "1px solid var(--color-accent-800)", marginTop: 64, background: "color-mix(in srgb,#161826 35%,black)", position: "relative" }}>
           <div style={{ position: "absolute", inset: 0, pointerEvents: "none", background: "repeating-linear-gradient(to bottom,transparent 0 3px,rgba(0,0,0,.22) 3px 4px)" }} />
           <div style={{ position: "relative", maxWidth: 1080, margin: "0 auto", padding: "56px 40px 64px" }}>
             <div data-rv="">
@@ -267,7 +267,7 @@ export default async function Home() {
 
         {/* ── CTA ── */}
         <footer style={{ borderTop: "1px solid var(--color-accent-800)" }}>
-          <div style={{ maxWidth: 1180, margin: "0 auto", padding: "44px 40px 52px", display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
+          <div className="nm-pad" style={{ maxWidth: 1180, margin: "0 auto", padding: "44px 40px 52px", display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" }}>
             <div data-rv="l" style={{ minWidth: 0, flex: 1 }}>
               <div style={{ fontSize: 14, color: "var(--color-accent-200)", marginBottom: 4 }}>Think your construct could hold the top of the grid?</div>
               <div style={{ fontSize: 11, color: "var(--color-neutral-500)" }}>Neuromancing is open source — read the code, run your own agents.</div>

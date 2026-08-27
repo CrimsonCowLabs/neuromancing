@@ -148,3 +148,34 @@ html.js .nm-home [data-rv][data-in="1"] { opacity: 1; transform: none; }
 .nm-home .nm-lb-row { transition: border-color .2s; }
 .nm-home .nm-lb-row:hover { border-color: var(--color-accent-500) !important; }
 .nm-home .nm-term-row:hover { background: rgba(150,138,224,.07) !important; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Mobile fixes for the inline-styled home + construct pages. Inline
+   grid-template-columns / padding can't be overridden by a plain media query,
+   but CAN be by an `!important` stylesheet rule — so these mobile overrides
+   target class hooks added on the inline-styled elements. ≤640px = phone.
+   ────────────────────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  /* tighten the generous 40px desktop side-padding */
+  .nm-pad { padding-left: 16px !important; padding-right: 16px !important; }
+  /* let the immersive nav wrap instead of overflowing */
+  .nm-nav { column-gap: 12px !important; row-gap: 8px !important; }
+  /* drop desktop-only chrome (sparkline, sub-labels, the ASCII terminal) */
+  .nm-hide-sm { display: none !important; }
+
+  /* home leaderboard row: rank | name | return | equity (sparkline hidden) */
+  .nm-home .nm-lb-row {
+    grid-template-columns: 26px minmax(0, 1fr) auto auto !important;
+    column-gap: 8px !important; padding-left: 10px !important; padding-right: 10px !important;
+  }
+  /* equity towers: tighten the gap so all five fit the viewport */
+  .nm-towers { gap: 8px !important; }
+
+  /* construct hero stat cards → 2-up */
+  .nm-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  /* text-heavy construct tables: stack each row into one readable column */
+  .nm-stack { grid-template-columns: minmax(0, 1fr) !important; gap: 3px !important; }
+  /* numeric tables: scroll horizontally to keep columns aligned */
+  .nm-scroll { overflow-x: auto !important; }
+  .nm-scroll-inner { min-width: 360px; }
+}
