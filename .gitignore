@@ -48,6 +48,8 @@ CLAUDE.md
 deploy.sh
 .rsync-exclude
 docker-compose.override.yml.example
+docker-compose.vps.yml
+scripts/backup_db.sh
 docs/DEPLOY.md
 docs/11-operations.md
 docs/private/
