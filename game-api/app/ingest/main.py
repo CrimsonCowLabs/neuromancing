@@ -8,6 +8,19 @@ second writer would corrupt the archive. See docs/06-orchestration.md.
 Live Alpaca when ALPACA_API_KEY is set; otherwise a synthetic random-walk feed so
 the game runs without keys. Both write to the two-tier price store.
 
+Recovery is layered, and the redundancy is deliberate — each layer fails in a way the
+next one is specifically built to survive:
+
+    layer                  handles                        blind to
+    ─────────────────────  ─────────────────────────────  ──────────────────────────
+    _supervise watchdog    a silent stream, loop alive    a wedged loop
+    deadman (OS thread)    prolonged feed staleness       a dead/unschedulable process
+    healthcheck escalation a WEDGED LOOP (SIGKILLs PID 1) an unresponsive container
+
+The ordering matters: thresholds run watchdog < deadman < heartbeat, so the cheapest
+in-process fix always gets first attempt and only a genuinely wedged loop reaches the
+out-of-process kill. See app/ingest/health.py for why that last layer has to exist.
+
 Run: `uv run python -m app.ingest.main`
 """
 
@@ -15,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from contextlib import suppress
 
 from neuromancing_shared import price_store
@@ -113,25 +127,89 @@ async def _gapfill_job() -> None:
             log.warning("gap-fill failed: %s", e)
 
 
-async def _deadman_job() -> None:
-    """Escalation backstop: if the crypto feed goes stale past the deadman threshold AFTER
-    it has been live at least once, force a hard process exit so `restart: unless-stopped`
-    gives a fully fresh container (fresh sockets/SDK client) — the case the in-loop watchdog
-    reconnect can't fix. The `_seen_fresh` latch means a feed that never comes up (Alpaca
-    outage at boot) never fires this, so it only escalates a genuine live->stale regression."""
+WEDGE_KEY = "ingest:debug:wedge"
+
+
+async def _heartbeat_job() -> None:
+    """Stamp a liveness beat so an OUT-OF-PROCESS observer can tell "the feed stalled"
+    apart from "the event loop is wedged". This is an ordinary asyncio task, which is
+    exactly the point: if the loop stops scheduling, the beat stops — and only the
+    container healthcheck (a separate process) can act on that. See app/ingest/health.py.
+
+    A dedicated task rather than a beat inside `_supervise`: that supervisor's outer loop
+    only iterates when a task RESTARTS, so beating from there would signal liveness on
+    crash and never during healthy running — backwards. The trade-off is that this proves
+    the loop schedules, not that every individual writer is progressing; feed freshness is
+    the signal that covers the latter."""
+    from app.ingest import health
+
+    settings = get_settings()
+    while True:
+        # Drill hook (inert unless INGEST_DEBUG_FREEZE_ENABLED): setting the wedge key
+        # stops the beat, simulating a frozen loop so the healthcheck's SIGKILL path can
+        # be exercised live. Freezing quotes alone can't do that — the beat continues.
+        if settings.ingest_debug_freeze_enabled and await price_store._redis.get(WEDGE_KEY):
+            log.error("DEBUG: heartbeat SUPPRESSED (fault injection) — expect escalation")
+        else:
+            await health.write_heartbeat(price_store._redis)
+        await asyncio.sleep(settings.ingest_heartbeat_interval_s)
+
+
+# Deadman latch — PROCESS-global on purpose. It was task-local, so when the deadman task
+# raised, _supervise restarted it with the latch reset to False; the feed being stale by
+# then, it could never re-arm and the deadman was silently disarmed for the life of the
+# process. That is the regression behind the 2026-08-27 8h45m outage.
+_seen_fresh = False
+
+
+def _reset_deadman_latch() -> None:
+    """Test seam: restore the never-been-live state."""
+    global _seen_fresh
+    _seen_fresh = False
+
+
+def _deadman_should_exit(age: float | None, *, health_stale_s: float, deadman_stale_s: float) -> bool:
+    """True when the feed has gone stale AFTER having been live at least once. A feed that
+    never came up (Alpaca outage at boot) must never fire this, or boot becomes a restart loop."""
+    from app.ingest import health
+
+    global _seen_fresh
+    if age is not None and age <= health_stale_s:
+        _seen_fresh = True
+        return False
+    return _seen_fresh and health.is_stale(age, deadman_stale_s)
+
+
+def _deadman_thread() -> None:
+    """Escalation backstop for a stale-but-recoverable feed: hard-exit so
+    `restart: unless-stopped` gives a fresh container (fresh sockets/SDK client) — the case
+    the in-loop watchdog reconnect can't fix.
+
+    Runs on a daemon OS THREAD with its own synchronous Redis connection so that a starved
+    or wedged event loop cannot disarm it. As an asyncio task it froze along with the loop
+    it was meant to police. (A fully wedged loop is still the healthcheck's job — this only
+    shortens recovery for the far more common feed-stall case.)"""
     import os
+    import time
+
+    from neuromancing_shared.redisio import make_redis_sync
 
     from app.ingest import health
 
     settings = get_settings()
-    seen_fresh = False
+    client = make_redis_sync(settings.redis_url)
     while True:
-        await asyncio.sleep(30)
-        age = await health.crypto_feed_age(price_store._redis)
-        if age is not None and age <= settings.ingest_health_stale_s:
-            seen_fresh = True
+        time.sleep(settings.ingest_deadman_poll_s)
+        try:
+            age = health.crypto_feed_age_sync(client)
+        except Exception as e:  # noqa: BLE001 — a Redis blip must not kill the process
+            log.warning("deadman probe failed: %s", e)
             continue
-        if seen_fresh and health.is_stale(age, settings.ingest_deadman_stale_s):
+        if _deadman_should_exit(
+            age,
+            health_stale_s=settings.ingest_health_stale_s,
+            deadman_stale_s=settings.ingest_deadman_stale_s,
+        ):
             log.critical("DEADMAN: crypto feed stale (age=%s > %ss) after being live — "
                          "hard-exiting for a fresh container restart",
                          "none" if age is None else f"{age:.0f}s", settings.ingest_deadman_stale_s)
@@ -140,10 +218,18 @@ async def _deadman_job() -> None:
 
 async def main() -> None:
     settings = get_settings()
-    tasks: list = [asyncio.create_task(_supervise("flush", _flush_job))]
+    from app.ingest import health
+
+    # Stamp the start marker BEFORE any slow work: it gates the healthcheck's escalation
+    # grace, and until it lands a fresh container is indistinguishable from a wedged one.
+    await health.mark_started(price_store._redis)
+    tasks: list = [
+        asyncio.create_task(_supervise("flush", _flush_job)),
+        asyncio.create_task(_supervise("heartbeat", _heartbeat_job)),
+    ]
 
     if settings.alpaca_api_key:
-        from app.ingest import alpaca_feed, backfill, equity_poll, health
+        from app.ingest import alpaca_feed, backfill, equity_poll
 
         log.info("ALPACA_API_KEY present — live feed (crypto ws + equity poller)")
         # Warm history in the background (one-shot); do NOT block the live feed on it.
@@ -154,7 +240,8 @@ async def main() -> None:
             "crypto-stream", alpaca_feed.run_crypto_stream,
             freshness=lambda: health.crypto_feed_age(price_store._redis),
             max_silence=settings.ingest_crypto_max_silence_s)))
-        tasks.append(asyncio.create_task(_supervise("deadman", _deadman_job)))
+        # Daemon OS thread, not an asyncio task — see _deadman_thread.
+        threading.Thread(target=_deadman_thread, name="deadman", daemon=True).start()
         if settings.ingest_debug_freeze_enabled:  # drills only — inert unless enabled
             tasks.append(asyncio.create_task(_supervise("freeze-flag", alpaca_feed.watch_freeze_flag)))
         tasks.append(asyncio.create_task(

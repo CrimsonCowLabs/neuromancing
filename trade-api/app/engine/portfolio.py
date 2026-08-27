@@ -97,6 +97,33 @@ def positions_value(marks: dict[str, Decimal], positions: dict[str, Decimal]) ->
     return quantize_money(total)
 
 
+def marks_are_stale(
+    marks: dict[str, Decimal],
+    positions: dict[str, Decimal],
+    feed_age_s: float | None,
+    threshold: float,
+) -> bool:
+    """Whether an equity snapshot built from these marks should be flagged stale.
+
+    Two ways a valuation can be untrustworthy, and the second used to be invisible:
+      * a position symbol has NO mark at all, or
+      * every symbol is priced, but the pricing pipeline itself had gone dark.
+
+    Quotes are cached ~26h by design, so a dead feed still prices the whole book — on
+    2026-08-27 that produced ~840 snapshots per account over three hours, all with a
+    single distinct equity and all flagged fresh. Presence is not freshness.
+
+    `feed_age_s` is the caller's 24/7 feed-liveness signal (crypto quote age), NOT the age
+    of these particular marks: equity quotes are hours old by design overnight, so judging
+    a snapshot on its own marks would flag every out-of-hours valuation. An unknown age
+    (None) never manufactures a staleness claim we cannot substantiate."""
+    if not positions:
+        return False
+    if any(s not in marks for s in positions):
+        return True
+    return feed_age_s is not None and feed_age_s > threshold
+
+
 def short_collateral(positions: list[tuple[Decimal, Decimal]], mult: Decimal) -> Decimal:
     """Reg-T-style entry-based collateral reserved against buying power for short
     positions. `positions` = [(qty, avg_entry), ...]; only qty < 0 reserves."""

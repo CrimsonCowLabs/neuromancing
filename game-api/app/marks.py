@@ -56,3 +56,22 @@ async def get_marks(symbols: list[str]) -> dict[str, str]:
             log.warning("price_store mark fallback failed for %s: %s", s, e)
 
     return marks
+
+
+async def get_marks_with_feed_age(symbols: list[str]) -> tuple[dict[str, str], float | None]:
+    """`get_marks`, plus the age of the freshest 24/7 crypto quote — the system's single
+    "is the pricing pipeline live?" signal, the same one behind the UI's stale banner.
+
+    Deliberately NOT the age of these particular marks. The equity poller is gated to
+    market hours, so equity quotes are hours old by design every night and weekend;
+    judging a snapshot on its own marks' age would flag almost every out-of-hours
+    valuation and make the flag noise. Crypto never closes, so its age isolates a broken
+    pipeline from a closed market — which is exactly what went wrong on 2026-08-27."""
+    from .ingest.health import crypto_feed_age
+
+    marks = await get_marks(symbols)
+    try:
+        return marks, await crypto_feed_age(_redis)
+    except Exception as e:  # noqa: BLE001 — a probe blip must never break a tick
+        log.warning("feed-age probe failed: %s", e)
+        return marks, None

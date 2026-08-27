@@ -130,9 +130,13 @@ services:
       db: { condition: service_healthy }
       redis: { condition: service_healthy }
     command: ["uv", "run", "python", "-m", "app.ingest.main"]
-    # Feed-liveness healthcheck: exits non-zero when the crypto feed is stale (visibility;
-    # the in-process deadman is what force-restarts). Uses `uv run` to hit the venv python.
-    # Generous start_period covers first-run backfill + bytecode compile.
+    # Ingest health: exits non-zero when the crypto feed is stale OR the event loop has
+    # stopped beating. A stale feed is reported only (the in-loop watchdog + deadman own
+    # it); a WEDGED LOOP is escalated — this probe runs as a separate process, so it is the
+    # one supervisor that outlives a frozen loop, and it SIGKILLs PID 1 so `restart:
+    # unless-stopped` below supplies a fresh container. See game-api/app/ingest/health.py.
+    # Uses `uv run` to hit the venv python. Generous start_period covers first-run
+    # backfill + bytecode compile (escalation has its own, independent grace window).
     healthcheck:
       test: ["CMD", "uv", "run", "python", "-m", "app.ingest.health"]
       interval: 30s

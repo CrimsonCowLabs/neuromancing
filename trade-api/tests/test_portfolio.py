@@ -4,7 +4,12 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from app.engine.portfolio import PositionState, apply_fill, positions_value
+from app.engine.portfolio import (
+    PositionState,
+    apply_fill,
+    marks_are_stale,
+    positions_value,
+)
 
 D = Decimal
 ZERO = D("0")
@@ -102,3 +107,54 @@ def test_buy_then_full_sell_cash_conservation(q1, p1, p2):
     assert sell.position.qty == ZERO
     # Final cash - start cash should equal realized pnl (within qty rounding).
     assert abs((sell.cash - start) - sell.realized_pnl) < D("0.01")
+
+
+# ── mark staleness (the flag on each equity snapshot) ──
+def test_marks_stale_when_a_position_symbol_has_no_mark():
+    """Original meaning, preserved: a symbol we could not price at all."""
+    assert marks_are_stale(
+        marks={"AAPL": D("100")}, positions={"AAPL": D("1"), "TSLA": D("1")},
+        feed_age_s=0.0, threshold=300.0,
+    ) is True
+
+
+def test_marks_stale_when_the_feed_went_dark_though_every_symbol_is_priced():
+    """The 2026-08-27 shape: quotes linger in Redis for ~26h, so a dead feed still
+    prices every symbol — just with hours-old numbers. Presence is not freshness."""
+    assert marks_are_stale(
+        marks={"BTC/USD": D("80000")}, positions={"BTC/USD": D("1")},
+        feed_age_s=30699.0, threshold=300.0,
+    ) is True
+
+
+def test_marks_fresh_when_complete_and_recent():
+    assert marks_are_stale(
+        marks={"BTC/USD": D("80000")}, positions={"BTC/USD": D("1")},
+        feed_age_s=12.0, threshold=300.0,
+    ) is False
+
+
+def test_marks_not_stale_on_unknown_age_when_complete():
+    """Age unknown (an older caller that sends no feed age) must not manufacture a
+    staleness claim we cannot substantiate."""
+    assert marks_are_stale(
+        marks={"BTC/USD": D("80000")}, positions={"BTC/USD": D("1")},
+        feed_age_s=None, threshold=300.0,
+    ) is False
+
+
+def test_empty_portfolio_is_never_stale():
+    assert marks_are_stale(marks={}, positions={}, feed_age_s=99999.0, threshold=300.0) is False
+
+
+def test_equity_marks_are_not_stale_overnight_while_the_feed_is_alive():
+    """The equity poller is gated to market hours, so equity quotes are hours old by
+    design every night. Staleness keys off the 24/7 crypto feed, not per-symbol mark age
+    — otherwise almost every out-of-hours snapshot would be flagged and the flag would
+    carry no information."""
+    assert marks_are_stale(
+        marks={"AAPL": D("190"), "BTC/USD": D("80000")},
+        positions={"AAPL": D("10"), "BTC/USD": D("1")},
+        feed_age_s=8.0,          # crypto still ticking -> pipeline healthy
+        threshold=300.0,
+    ) is False

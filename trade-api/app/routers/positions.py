@@ -39,12 +39,16 @@ async def list_positions(account_id: int, broker=Depends(get_broker)) -> list[Po
 async def mark_to_market(
     account_id: int,
     marks: dict[str, Decimal] = Body(..., embed=True),
+    # Age of the freshest 24/7 crypto quote — the caller's "is the pricing pipeline
+    # live?" signal. Optional so older callers still work; without it a snapshot can only
+    # be judged on missing symbols, never on frozen prices.
+    feed_age_s: float | None = Body(None, embed=True),
     broker=Depends(get_broker),
 ) -> EquityOut:
     acct = await broker.get_account(account_id)
     if acct is None:
         raise HTTPException(404, "account not found")
-    snap = await broker.mark_to_market(account_id, marks)
+    snap = await broker.mark_to_market(account_id, marks, feed_age_s)
     await broker.session.commit()
     return EquityOut(
         account_id=account_id,

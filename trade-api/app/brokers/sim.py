@@ -14,7 +14,13 @@ from neuromancing_shared.money import D, ZERO, quantize_money
 
 from ..config import get_settings
 from ..engine.matching import compute_fill, evaluate_exit, limit_stop_crosses
-from ..engine.portfolio import PositionState, apply_fill, positions_value, short_collateral
+from ..engine.portfolio import (
+    PositionState,
+    apply_fill,
+    marks_are_stale,
+    positions_value,
+    short_collateral,
+)
 from ..models import (
     Account,
     AssetClass,
@@ -399,7 +405,7 @@ class SimBroker:
         return filled
 
     async def mark_to_market(
-        self, account_id: int, marks: dict[str, Decimal]
+        self, account_id: int, marks: dict[str, Decimal], feed_age_s: float | None = None
     ) -> EquitySnapshot:
         account = await self.get_account(account_id)
         positions = await self.list_positions(account_id)
@@ -418,7 +424,9 @@ class SimBroker:
             total_equity=total,
             realized_pnl=realized,
             unrealized_pnl=unrealized,
-            is_stale=any(s not in marks for s in pos_map),
+            is_stale=marks_are_stale(
+                marks, pos_map, feed_age_s, get_settings().ingest_health_stale_s
+            ),
         )
         self.session.add(snap)
         await self.session.flush()
