@@ -161,6 +161,10 @@ async def _heartbeat_job() -> None:
 # process. That is the regression behind the 2026-08-27 8h45m outage.
 _seen_fresh = False
 
+# Backoff before the deadman thread re-arms after an unexpected error (e.g. Redis not up
+# yet at boot). Short: a disarmed deadman is the thing we are protecting against.
+_DEADMAN_RETRY_S = 30.0
+
 
 def _reset_deadman_latch() -> None:
     """Test seam: restore the never-been-live state."""
@@ -196,24 +200,30 @@ def _deadman_thread() -> None:
 
     from app.ingest import health
 
-    settings = get_settings()
-    client = make_redis_sync(settings.redis_url)
+    # Nothing supervises this thread, so it must supervise itself: connecting can fail
+    # (Redis is still starting when we are), and an unguarded raise here would end the
+    # thread silently for the life of the process — the same permanent-disarm failure the
+    # process-global latch exists to prevent. The latch survives these retries by design.
     while True:
-        time.sleep(settings.ingest_deadman_poll_s)
         try:
-            age = health.crypto_feed_age_sync(client)
-        except Exception as e:  # noqa: BLE001 — a Redis blip must not kill the process
-            log.warning("deadman probe failed: %s", e)
-            continue
-        if _deadman_should_exit(
-            age,
-            health_stale_s=settings.ingest_health_stale_s,
-            deadman_stale_s=settings.ingest_deadman_stale_s,
-        ):
-            log.critical("DEADMAN: crypto feed stale (age=%s > %ss) after being live — "
-                         "hard-exiting for a fresh container restart",
-                         "none" if age is None else f"{age:.0f}s", settings.ingest_deadman_stale_s)
-            os._exit(1)
+            settings = get_settings()
+            client = make_redis_sync(settings.redis_url)
+            while True:
+                time.sleep(settings.ingest_deadman_poll_s)
+                age = health.crypto_feed_age_sync(client)
+                if _deadman_should_exit(
+                    age,
+                    health_stale_s=settings.ingest_health_stale_s,
+                    deadman_stale_s=settings.ingest_deadman_stale_s,
+                ):
+                    log.critical(
+                        "DEADMAN: crypto feed stale (age=%s > %ss) after being live — "
+                        "hard-exiting for a fresh container restart",
+                        "none" if age is None else f"{age:.0f}s", settings.ingest_deadman_stale_s)
+                    os._exit(1)
+        except Exception as e:  # noqa: BLE001 — never let the deadman die quietly
+            log.warning("deadman thread error (%s); re-arming in %ss", e, _DEADMAN_RETRY_S)
+            time.sleep(_DEADMAN_RETRY_S)
 
 
 async def main() -> None:
