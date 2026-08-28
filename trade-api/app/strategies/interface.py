@@ -37,7 +37,12 @@ from .options_backtest import backtest_structure
 @dataclass(frozen=True)
 class BacktestConfig:
     """Equity backtest knobs: fixed-notional sizing, per-side cost, and the exit discipline
-    replayed on each bar. Defaults mirror the harness's live-like defaults."""
+    replayed on each bar. Defaults mirror the harness's live-like defaults.
+
+    Money here is `float`, not Decimal — deliberately. The backtest is a rank-faithful
+    harness (CONTEXT.md), not an absolute-P&L authority; `_replay` converts to Decimal at the
+    P&L spine (`apply_fill`), which is the one place money must be exact. These knobs only
+    parameterize sizing/cost, so they stay float like the rest of the harness."""
     starting_cash: float = 10000.0
     alloc_pct: float = DEFAULT_ALLOC_PCT
     cost_bps: float = DEFAULT_COST_BPS
@@ -48,7 +53,8 @@ class BacktestConfig:
 class OptionsBacktestConfig:
     """Options backtest knobs: the synthetic-chain pricing parameters the structure is
     marked and settled under (risk-free rate, dividend yield, variance-risk premium, skew,
-    term). Defaults mirror the settings-driven live values."""
+    term). Defaults mirror the settings-driven live values. Money is `float` for the same
+    rank-faithful-harness reason as `BacktestConfig`."""
     starting_cash: float = 100_000.0
     r: float = 0.04
     q: float = 0.0
