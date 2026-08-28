@@ -18,32 +18,20 @@ from __future__ import annotations
 
 from typing import Any
 
+from neuromancing_shared.strategy_spec import (
+    base_timeframe,
+    required_timeframes,  # noqa: F401 — re-exported for import-path compatibility
+    tf_seconds,
+)
+
 from .base import HOLD, Signal
 from .indicators import compute_indicator, scalar_value
 
-_TF_SECONDS = {"1m": 60, "5m": 300, "1h": 3600, "1d": 86400}
 _OPS = {
     "<": lambda a, b: a < b, "<=": lambda a, b: a <= b,
     ">": lambda a, b: a > b, ">=": lambda a, b: a >= b,
     "==": lambda a, b: a == b, "!=": lambda a, b: a != b,
 }
-
-
-def _tf_sec(tf: str) -> int:
-    return _TF_SECONDS.get(tf, 60)
-
-
-def base_timeframe(spec: dict) -> str:
-    """The evaluation cadence: explicit base_timeframe, else the fastest indicator tf."""
-    ind_tfs = [i.get("timeframe") for i in spec["indicators"] if i.get("timeframe")]
-    return spec.get("base_timeframe") or (min(ind_tfs, key=_tf_sec) if ind_tfs else "1m")
-
-
-def required_timeframes(spec: dict) -> list[str]:
-    """All distinct timeframes a spec needs loaded (indicator tfs ∪ base)."""
-    tfs = {i.get("timeframe") for i in spec["indicators"] if i.get("timeframe")}
-    tfs.add(base_timeframe(spec))
-    return sorted(tfs, key=_tf_sec)
 
 
 def _epoch(ts) -> float:
@@ -52,13 +40,11 @@ def _epoch(ts) -> float:
 
 def evaluate_composed(spec: dict, bars_by_tf: dict[str, list]) -> Signal:
     inds = {i["id"]: i for i in spec["indicators"]}
-    ind_tfs = [i.get("timeframe") for i in spec["indicators"] if i.get("timeframe")]
-    base_tf = spec.get("base_timeframe") or (
-        min(ind_tfs, key=_tf_sec) if ind_tfs else "1m")
+    base_tf = base_timeframe(spec)
     base = bars_by_tf.get(base_tf) or []
     if len(base) < 2:  # need current + previous base step for a transition
         return HOLD
-    bsec = _tf_sec(base_tf)
+    bsec = tf_seconds(base_tf)
 
     # Evaluation instants: close-time of the latest base bar (now), the previous, and
     # the one before (prev2 — needed so a cross's "previous" is defined at step 1).
@@ -70,7 +56,7 @@ def evaluate_composed(spec: dict, bars_by_tf: dict[str, list]) -> Signal:
     for iid, ind in inds.items():
         tf = ind.get("timeframe") or base_tf
         ibars = bars_by_tf.get(tf) or []
-        tsec = _tf_sec(tf)
+        tsec = tf_seconds(tf)
         for k in range(3):
             c = cutoffs[k]
             if c is None:

@@ -39,6 +39,30 @@ OPS = ("<", "<=", ">", ">=", "==", "!=")
 CROSS = ("above", "below")
 ARCHETYPES = ("trend", "mean_reversion", "momentum", "breakout", "trend_pullback", "custom")
 
+# Seconds per timeframe bar — the ordering key over a set of timeframes (fastest first)
+# and the as-of window width the evaluator uses. The one home for "which timeframes does
+# this spec need"; both services derive base/required timeframes from here so the rule is
+# never kept aligned by hand.
+_TF_SECONDS = {"1m": 60, "5m": 300, "1h": 3600, "1d": 86400}
+
+
+def tf_seconds(tf: str) -> int:
+    """Seconds in one bar of `tf`; the ordering key for a timeframe set. Unknown → 60."""
+    return _TF_SECONDS.get(tf, 60)
+
+
+def base_timeframe(spec: dict) -> str:
+    """The evaluation cadence: explicit `base_timeframe`, else the fastest indicator tf."""
+    ind_tfs = [i.get("timeframe") for i in spec.get("indicators", []) if i.get("timeframe")]
+    return spec.get("base_timeframe") or (min(ind_tfs, key=tf_seconds) if ind_tfs else "1m")
+
+
+def required_timeframes(spec: dict) -> list[str]:
+    """All distinct timeframes a spec needs loaded (indicator tfs ∪ base), fastest first."""
+    tfs = {i.get("timeframe") for i in spec.get("indicators", []) if i.get("timeframe")}
+    tfs.add(base_timeframe(spec))
+    return sorted(tfs, key=tf_seconds)
+
 
 class IndicatorSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
