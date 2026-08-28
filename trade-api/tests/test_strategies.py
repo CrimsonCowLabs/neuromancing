@@ -1,15 +1,24 @@
 import math
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 
-from app.strategies import evaluate
-from app.strategies.backtest import backtest
 from app.strategies.base import Bar
 from app.strategies.indicators import rsi, sma
+from app.strategies.interface import BacktestConfig, build_strategy
 
 
 def _bars(closes):
     t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return [Bar(ts=t0 + timedelta(minutes=i), open=c, high=c, low=c, close=c, volume=1) for i, c in enumerate(closes)]
+
+
+def _evaluate(kind, spec, bars):
+    """Single-series evaluation through the interface: a bare bar list under one timeframe."""
+    return build_strategy(kind, spec).evaluate({"1m": bars})
+
+
+def _backtest(kind, spec, bars):
+    return asdict(build_strategy(kind, spec).backtest({"1m": bars}, BacktestConfig()))
 
 
 def test_sma_and_rsi_basic():
@@ -23,7 +32,7 @@ def test_sma_crossover_buy_on_cross_up():
     closes = [100 - i for i in range(40)] + [60 + i * 3 for i in range(20)]
     spec = {"fn": "sma_crossover", "fast": 5, "slow": 20}
     # Evaluate over the full series; at the end fast should be above slow.
-    sig = evaluate("signal_fn", spec, _bars(closes))
+    sig = _evaluate("signal_fn", spec, _bars(closes))
     assert sig.action in ("buy", "hold")  # deterministic, no exception
 
 
@@ -35,7 +44,7 @@ def _count_action(spec, closes, start, action):
     """How many times the strategy emits `action` as the series grows bar by bar."""
     return sum(
         1 for i in range(start, len(closes) + 1)
-        if evaluate("signal_fn", spec, _bars(closes[:i])).action == action
+        if _evaluate("signal_fn", spec, _bars(closes[:i])).action == action
     )
 
 
@@ -63,15 +72,15 @@ def test_rule_dsl_dip_buyer():
         "buy_when": {"all": [{"indicator": "rsi", "period": 14, "op": "<", "value": 35}]},
         "exit_when": {"any": [{"indicator": "rsi", "period": 14, "op": ">", "value": 65}]},
     }
-    sig = evaluate("rule_dsl", spec, _bars(closes))
+    sig = _evaluate("rule_dsl", spec, _bars(closes))
     assert sig.action == "buy"
 
 
 def test_backtest_is_deterministic():
     closes = [100 + 10 * math.sin(i / 5) for i in range(300)]
     spec = {"fn": "sma_crossover", "fast": 5, "slow": 20}
-    r1 = backtest("signal_fn", spec, _bars(closes))
-    r2 = backtest("signal_fn", spec, _bars(closes))
+    r1 = _backtest("signal_fn", spec, _bars(closes))
+    r2 = _backtest("signal_fn", spec, _bars(closes))
     assert r1 == r2
     assert r1["bars"] == 300
     assert r1["trades"] >= 0
@@ -81,4 +90,4 @@ def test_unknown_kind_raises():
     import pytest
 
     with pytest.raises(ValueError):
-        evaluate("nope", {}, _bars([1, 2, 3]))
+        _evaluate("nope", {}, _bars([1, 2, 3]))
