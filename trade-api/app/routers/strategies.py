@@ -3,9 +3,11 @@ from __future__ import annotations
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
+from neuromancing_shared.options_strategy import validate_structure
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import get_settings
 from ..db import get_session
 from ..models import (
     SignalAction,
@@ -15,9 +17,6 @@ from ..models import (
     StrategySignal,
     StrategyStatus,
 )
-from neuromancing_shared.options_strategy import validate_structure
-
-from ..config import get_settings
 from ..schemas import (
     AdhocBacktestRequest,
     BacktestRequest,
@@ -31,30 +30,61 @@ from ..schemas import (
     StrategyStatusUpdate,
 )
 from ..security import require_service_token
-from ..strategies import evaluate
-from ..strategies.backtest import DEFAULT_ALLOC_PCT, DEFAULT_COST_BPS, ExitConfig, backtest, backtest_multi
-from ..strategies.composed import required_timeframes
 from ..strategies.data import load_bars
-from ..strategies.engine import evaluate_multi, list_house_strategies
+from ..strategies.engine import list_house_strategies
+from ..strategies.interface import (
+    BacktestConfig,
+    EquityMetrics,
+    ExitConfig,
+    OptionsBacktestConfig,
+    build_strategy,
+)
 from ..strategies.library import SIGNAL_FNS
-from ..strategies.options_backtest import RV_WINDOW, backtest_structure
+from ..strategies.options_backtest import RV_WINDOW
 from ..strategies.spec import validate_spec
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
 
-def _bt_kwargs(body: AdhocBacktestRequest | BacktestRequest) -> dict:
-    """Turn a backtest request's optional sizing/cost/exit fields into keyword args for
-    `backtest` / `backtest_multi`, applying the harness defaults for anything omitted."""
-    return {
-        "alloc_pct": body.alloc_pct if body.alloc_pct is not None else DEFAULT_ALLOC_PCT,
-        "cost_bps": body.cost_bps if body.cost_bps is not None else DEFAULT_COST_BPS,
-        "exit_config": ExitConfig(
+def _bt_config(body: AdhocBacktestRequest | BacktestRequest) -> BacktestConfig:
+    """Turn a backtest request's optional sizing/cost/exit fields into the one backtest
+    `config`, applying the harness's live-like defaults for anything omitted."""
+    knobs = {}
+    if body.alloc_pct is not None:
+        knobs["alloc_pct"] = body.alloc_pct
+    if body.cost_bps is not None:
+        knobs["cost_bps"] = body.cost_bps
+    return BacktestConfig(
+        starting_cash=body.starting_cash,
+        exit_config=ExitConfig(
             stop_loss_pct=body.stop_loss_pct,
             take_profit_pct=body.take_profit_pct,
             trailing_stop_pct=body.trailing_stop_pct,
         ),
-    }
+        **knobs,
+    )
+
+
+async def _load_by_tf(
+    session: AsyncSession, symbol: str, tfs: list[str], limit: int, *, window=None
+) -> dict[str, list]:
+    """The one per-timeframe bar loader driven by `strat.required_timeframes(...)`. Each
+    (deduped) timeframe is served from its hot cache; empty series are dropped."""
+    out: dict[str, list] = {}
+    for tf in tfs:
+        bb = await load_bars(session, symbol, tf, limit, window=window)
+        if bb:
+            out[tf] = bb
+    return out
+
+
+def _equity_result(symbol: str, metrics: EquityMetrics) -> BacktestResult:
+    """Serialize the equity arm of the Metrics union to the HTTP response model."""
+    return BacktestResult(
+        symbol=symbol, bars=metrics.bars, trades=metrics.trades, win_rate=metrics.win_rate,
+        total_return=metrics.total_return, max_drawdown=metrics.max_drawdown,
+        final_equity=metrics.final_equity,
+    )
 
 
 def _validate_for_kind(kind: str, spec: dict) -> dict:
@@ -161,27 +191,17 @@ async def evaluate_strategy(
     if strat is None:
         raise HTTPException(404, "strategy not found")
 
-    kind = strat.kind.value
-    # indicator_dsl carries its own (possibly multiple) timeframes; those win over
-    # the request's timeframe. Single-series kinds use the request timeframe.
-    tfs = required_timeframes(strat.spec) if kind == "indicator_dsl" else None
+    # One interface: indicator_dsl derives its own (possibly multiple) timeframes; single
+    # kinds require the request timeframe. Both then load → evaluate the same way.
+    strategy = build_strategy(strat.kind.value, strat.spec)
+    tfs = strategy.required_timeframes(request_timeframe=body.timeframe)
 
     out: list[SignalOut] = []
     for symbol in body.symbols:
-        if kind == "indicator_dsl":
-            bars_by_tf = {}
-            for tf in tfs:  # deduped; each hot-cache served
-                bb = await load_bars(session, symbol, tf, body.lookback)
-                if bb:
-                    bars_by_tf[tf] = bb
-            if not bars_by_tf:
-                continue
-            sig = evaluate_multi(kind, strat.spec, bars_by_tf)
-        else:
-            bars = await load_bars(session, symbol, body.timeframe, body.lookback)
-            if not bars:
-                continue
-            sig = evaluate(kind, strat.spec, bars)
+        bars_by_tf = await _load_by_tf(session, symbol, tfs, body.lookback)
+        if not bars_by_tf:
+            continue
+        sig = strategy.evaluate(bars_by_tf)
         out.append(
             SignalOut(symbol=symbol, action=sig.action, strength=sig.strength, features=sig.features)
         )
@@ -214,21 +234,14 @@ async def backtest_adhoc(
     except ValueError as e:
         raise HTTPException(422, f"invalid strategy spec: {e}")
     window = (body.window.start, body.window.end) if body.window else None
-    if body.kind == "indicator_dsl":
-        bars_by_tf = {}
-        for tf in required_timeframes(spec):
-            bb = await load_bars(session, body.symbol, tf, 5000, window=window)
-            if bb:
-                bars_by_tf[tf] = bb
-        if not bars_by_tf:
-            raise HTTPException(400, "no bars for symbol/window")
-        metrics = backtest_multi(body.kind, spec, bars_by_tf, body.starting_cash, **_bt_kwargs(body))
-    else:
-        bars = await load_bars(session, body.symbol, "1m", 5000, window=window)
-        if not bars:
-            raise HTTPException(400, "no bars for symbol/window")
-        metrics = backtest(body.kind, spec, bars, body.starting_cash, **_bt_kwargs(body))
-    return BacktestResult(symbol=body.symbol, **metrics)
+    strategy = build_strategy(body.kind, spec)
+    # single-series kinds backtest on "1m"; indicator_dsl derives its own timeframes.
+    tfs = strategy.required_timeframes(request_timeframe="1m")
+    bars_by_tf = await _load_by_tf(session, body.symbol, tfs, 5000, window=window)
+    if not bars_by_tf:
+        raise HTTPException(400, "no bars for symbol/window")
+    metrics = strategy.backtest(bars_by_tf, _bt_config(body))
+    return _equity_result(body.symbol, metrics)
 
 
 @router.post("/options-backtest", response_model=OptionsBacktestResult,
@@ -243,17 +256,26 @@ async def options_backtest_adhoc(
     except ValueError as e:
         raise HTTPException(422, f"invalid option structure: {e}")
     s = get_settings()
-    knobs = dict(r=s.options_risk_free_rate, q=s.options_div_yield, vrp=s.options_vrp_mult,
-                 skew=s.options_skew, term=s.options_term)
+    config = OptionsBacktestConfig(
+        starting_cash=body.starting_cash, r=s.options_risk_free_rate, q=s.options_div_yield,
+        vrp=s.options_vrp_mult, skew=s.options_skew, term=s.options_term)
     window = (body.window.start, body.window.end) if body.window else None
 
+    # The interface is per-series (one structure, one underlying's daily bars); cross-underlying
+    # aggregation stays a router concern.
+    strategy = build_strategy("option_structure", spec)
+    tfs = strategy.required_timeframes()
     per: list[dict] = []
     for u in body.underlyings:
-        bars = await load_bars(session, u.upper(), "1d", 5000, window=window)
-        if len(bars) < RV_WINDOW + 5:
+        bars_by_tf = await _load_by_tf(session, u.upper(), tfs, 5000, window=window)
+        if len(bars_by_tf.get("1d", [])) < RV_WINDOW + 5:
             continue
-        m = backtest_structure(spec, bars, starting_cash=body.starting_cash, **knobs)
-        m["underlying"] = u.upper()
+        metrics = strategy.backtest(bars_by_tf, config)
+        m = {"trades": metrics.trades, "win_rate": metrics.win_rate,
+             "total_return": metrics.total_return, "max_drawdown": metrics.max_drawdown,
+             "avg_credit": metrics.avg_credit, "avg_return_on_risk": metrics.avg_return_on_risk,
+             "assignment_rate": metrics.assignment_rate, "final_equity": metrics.final_equity,
+             "underlying": u.upper()}
         per.append(m)
     if not per:
         raise HTTPException(400, "no daily bars for any requested underlying")
@@ -281,19 +303,10 @@ async def backtest_strategy(
     strat = await session.get(Strategy, strategy_id)
     if strat is None:
         raise HTTPException(404, "strategy not found")
-    if strat.kind.value == "indicator_dsl":
-        bars_by_tf = {}
-        for tf in required_timeframes(strat.spec):
-            bb = await load_bars(session, body.symbol, tf, body.limit)
-            if bb:
-                bars_by_tf[tf] = bb
-        if not bars_by_tf:
-            raise HTTPException(400, "no bars for symbol")
-        metrics = backtest_multi(strat.kind.value, strat.spec, bars_by_tf, body.starting_cash,
-                                 **_bt_kwargs(body))
-    else:
-        bars = await load_bars(session, body.symbol, body.timeframe, body.limit)
-        if not bars:
-            raise HTTPException(400, "no bars for symbol")
-        metrics = backtest(strat.kind.value, strat.spec, bars, body.starting_cash, **_bt_kwargs(body))
-    return BacktestResult(symbol=body.symbol, **metrics)
+    strategy = build_strategy(strat.kind.value, strat.spec)
+    tfs = strategy.required_timeframes(request_timeframe=body.timeframe)
+    bars_by_tf = await _load_by_tf(session, body.symbol, tfs, body.limit)
+    if not bars_by_tf:
+        raise HTTPException(400, "no bars for symbol")
+    metrics = strategy.backtest(bars_by_tf, _bt_config(body))
+    return _equity_result(body.symbol, metrics)
