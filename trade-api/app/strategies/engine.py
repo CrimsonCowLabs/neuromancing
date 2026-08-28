@@ -1,13 +1,15 @@
-"""Strategy dispatch + house strategy catalog.
+"""House strategy catalog loader.
 
-Three kinds:
+The strategy *evaluation* surface (turn a spec into a signal or a track record) lives
+behind the one `Strategy` interface in `interface.py` (`build_strategy`). This module is
+now just the catalog: the house strategies live as validated YAML files under `catalog/`
+(the single source of truth), loaded by `list_house_strategies()`.
+
+Three kinds are wrapped by the interface:
 - **signal_fn** — named hardcoded functions (`library.py`), event-driven.
 - **rule_dsl** — the legacy declarative evaluator (`dsl.py`), single-tf, close-only.
 - **indicator_dsl** — the YAML-authored, validated, multi-timeframe, indicator-state
   model (`composed.py` + `spec.py`). This is the configurable strategy grammar.
-
-The house catalog lives as validated YAML files under `catalog/` (the single source
-of truth), loaded by `list_house_strategies()`.
 """
 
 from __future__ import annotations
@@ -16,40 +18,9 @@ import pathlib
 
 import yaml
 
-from .base import Bar, Signal
-from .composed import base_timeframe, evaluate_composed
-from .dsl import evaluate_dsl
-from .library import SIGNAL_FNS
 from .spec import validate_spec
 
 _CATALOG_DIR = pathlib.Path(__file__).parent / "catalog"
-
-
-def evaluate(kind: str, spec: dict, bars: list[Bar]) -> Signal:
-    """Single-series evaluation. For `indicator_dsl` this wraps `bars` under the
-    strategy's base timeframe — correct for single-tf strategies (and single-tf
-    backtests); the multi-tf live path uses `evaluate_multi`."""
-    if kind == "indicator_dsl":
-        return evaluate_composed(spec, {base_timeframe(spec): bars})
-    closes = [b.close for b in bars]
-    if kind == "signal_fn":
-        fn = SIGNAL_FNS.get(spec.get("fn", ""))
-        if fn is None:
-            raise ValueError(f"unknown signal_fn: {spec.get('fn')}")
-        return fn(closes, spec)
-    if kind == "rule_dsl":
-        return evaluate_dsl(spec, closes)
-    raise ValueError(f"unknown strategy kind: {kind}")
-
-
-def evaluate_multi(kind: str, spec: dict, bars_by_tf: dict[str, list[Bar]]) -> Signal:
-    """Multi-timeframe evaluation. `indicator_dsl` uses the composed engine over all
-    timeframes; single-series kinds fall back to their base/only series."""
-    if kind == "indicator_dsl":
-        return evaluate_composed(spec, bars_by_tf)
-    tf = spec.get("timeframe") or base_timeframe(spec)
-    bars = bars_by_tf.get(tf) or (next(iter(bars_by_tf.values())) if bars_by_tf else [])
-    return evaluate(kind, spec, bars)
 
 
 def list_house_strategies() -> list[dict]:

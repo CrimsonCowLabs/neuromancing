@@ -8,15 +8,26 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.strategies import BacktestConfig, build_strategy
 from app.strategies import indicators as ind
-from app.strategies.backtest import backtest_multi
 from app.strategies.base import Bar
-from app.strategies.composed import evaluate_composed
 from app.strategies.engine import list_house_strategies
 from app.strategies.spec import validate_spec
 
 UTC = timezone.utc
 T0 = datetime(2026, 3, 2, 14, 0, tzinfo=UTC)
+
+
+def _evaluate(spec, bars_by_tf):
+    """The indicator_dsl live signal through the one interface (was `evaluate_composed`)."""
+    return build_strategy("indicator_dsl", spec).evaluate(bars_by_tf)
+
+
+def _bt_multi(kind, spec, bars_by_tf, starting_cash=10000.0, *, cost_bps=None):
+    """indicator_dsl backtest through the one interface (was `backtest_multi`)."""
+    cfg = BacktestConfig(starting_cash=starting_cash) if cost_bps is None else \
+        BacktestConfig(starting_cash=starting_cash, cost_bps=cost_bps)
+    return build_strategy(kind, spec).backtest(bars_by_tf, cfg).to_dict()
 
 
 def _flat(ts, c, v=1000.0):
@@ -81,7 +92,7 @@ def test_zone_event_no_spam():
         "buy_when": {"all": [{"indicator": "r", "op": "<", "value": 30}]}})
     b5 = _series5m([100 - i * 2 for i in range(40)])  # decline into oversold, stays there
     buys = sum(1 for i in range(2, len(b5) + 1)
-               if evaluate_composed(spec, {"5m": b5[:i]}).action == "buy")
+               if _evaluate(spec, {"5m": b5[:i]}).action == "buy")
     assert buys == 1  # fires once on the crossing, not every tick it stays oversold
 
 
@@ -93,7 +104,7 @@ def test_cross_above_fires_once():
         "buy_when": {"all": [{"indicator": "f", "cross": "above", "other": "sl"}]}})
     b = _series5m([100, 99, 98, 97, 96, 95, 94, 93, 94, 96, 99, 103, 108, 114])
     buys = sum(1 for i in range(2, len(b) + 1)
-               if evaluate_composed(spec, {"5m": b[:i]}).action == "buy")
+               if _evaluate(spec, {"5m": b[:i]}).action == "buy")
     assert buys == 1
 
 
@@ -118,16 +129,16 @@ def test_multitf_no_lookahead():
     end1430 = [x for x in b5 if x.ts <= datetime(2026, 3, 2, 14, 30, tzinfo=UTC)]
     end1455 = [x for x in b5 if x.ts <= datetime(2026, 3, 2, 14, 55, tzinfo=UTC)]
     # 14:00 1h bar not yet closed at 14:30 → trend still 110 → no early fire
-    assert evaluate_composed(spec, {"5m": end1430, "1h": h1}).action == "hold"
+    assert _evaluate(spec, {"5m": end1430, "1h": h1}).action == "hold"
     # bar closes at 15:00; the base step whose close-time hits 15:00 sees the flip
-    assert evaluate_composed(spec, {"5m": end1455, "1h": h1}).action == "buy"
+    assert _evaluate(spec, {"5m": end1455, "1h": h1}).action == "buy"
 
 
 def test_multitf_no_spam():
     spec, h1 = _mtf_spec(), _h1()
     b5 = _series5m([300] * 19, start=datetime(2026, 3, 2, 14, 0, tzinfo=UTC))
     buys = sum(1 for i in range(2, len(b5) + 1)
-               if evaluate_composed(spec, {"5m": b5[:i], "1h": h1}).action == "buy")
+               if _evaluate(spec, {"5m": b5[:i], "1h": h1}).action == "buy")
     assert buys == 1  # a persistent 1h condition fires exactly once, not every 5m
 
 
@@ -140,7 +151,7 @@ def test_strength_map():
         "strength": {"buy": {"from": "r", "map": [30, 0]}}})
     b5 = _series5m([100 - i * 2 for i in range(40)])
     for i in range(2, len(b5) + 1):
-        s = evaluate_composed(spec, {"5m": b5[:i]})
+        s = _evaluate(spec, {"5m": b5[:i]})
         if s.action == "buy":
             assert 0.0 < s.strength <= 1.0
             return
@@ -165,7 +176,7 @@ def test_bollinger_mean_reversion_fires():
     spec = {h["name"]: h for h in list_house_strategies()}["Bollinger Mean Reversion"]["spec"]
     b5 = _series5m([100.0] * 24 + [99, 97.5, 95.5, 93, 90, 86.5, 82.5])  # sharp drop
     buys = sum(1 for i in range(2, len(b5) + 1)
-               if evaluate_composed(spec, {"5m": b5[:i]}).action == "buy")
+               if _evaluate(spec, {"5m": b5[:i]}).action == "buy")
     assert buys >= 1
 
 
@@ -177,8 +188,8 @@ def test_backtest_multi_deterministic_and_no_lookahead():
         "buy_when": {"all": [{"indicator": "r", "cross": "below", "value": 30}]},
         "exit_when": {"any": [{"indicator": "r", "cross": "above", "value": 55}]}})
     bars = {"5m": _series5m(_oscillating())}
-    m1 = backtest_multi("indicator_dsl", spec, bars)
-    m2 = backtest_multi("indicator_dsl", spec, bars)
+    m1 = _bt_multi("indicator_dsl", spec, bars)
+    m2 = _bt_multi("indicator_dsl", spec, bars)
     assert m1 == m2  # deterministic
     assert m1["trades"] >= 1  # this series trades
 
@@ -203,7 +214,7 @@ def test_backtest_costs_reduce_return():
         "buy_when": {"all": [{"indicator": "r", "cross": "below", "value": 30}]},
         "exit_when": {"any": [{"indicator": "r", "cross": "above", "value": 55}]}})
     bars = {"5m": _series5m(_oscillating())}
-    free = backtest_multi("indicator_dsl", spec, bars, cost_bps=0.0)
-    costed = backtest_multi("indicator_dsl", spec, bars, cost_bps=100.0)
+    free = _bt_multi("indicator_dsl", spec, bars, cost_bps=0.0)
+    costed = _bt_multi("indicator_dsl", spec, bars, cost_bps=100.0)
     assert free["trades"] == costed["trades"] >= 1
     assert costed["total_return"] < free["total_return"]  # fees/slippage bite
