@@ -70,11 +70,45 @@ Live (ALPACA_API_KEY set):
   equity-poll-{1m,5m,1h,1d}         # one task per tf, batched REST, market-hours-gated
   flush                             # Redis hot → Parquet durability
   gapfill                           # periodic short re-backfill (dedup makes it safe)
+  heartbeat                         # liveness beat → Redis (see "Staying alive" below)
+  deadman                           # daemon OS THREAD, not a task (see below)
 
 Synthetic (no key):
   synthetic                         # seeded random walk → Redis hot
   flush                             # → Parquet
+  heartbeat                         # → Redis
 ```
+
+### Staying alive
+
+Recovery is layered, because each mechanism is blind to the failure that kills the one
+above it:
+
+| layer | handles | blind to |
+|---|---|---|
+| `_supervise` watchdog | a silent stream while the loop is alive | a wedged loop |
+| deadman (daemon OS thread) | prolonged feed staleness | a dead/unschedulable process |
+| healthcheck escalation | a **wedged loop** — SIGKILLs PID 1 | an unresponsive container |
+
+Thresholds run watchdog < deadman < heartbeat, so the cheapest in-process fix always
+gets first attempt and only a genuinely wedged loop reaches the out-of-process kill.
+
+Two signals drive this, and keeping them separate is the whole design
+(`ingest/health.py`): **feed freshness** (crypto is 24/7, so a stale quote means the
+feed stalled — cure: reconnect) and **loop liveness** (a beat from an ordinary asyncio
+task, so a fresh beat proves the event loop is still scheduling — cure: nothing
+in-process). Quotes are cached ~26h, so a dead feed still prices the whole book; without
+the heartbeat, a wedged loop is indistinguishable from a quiet market.
+
+The deadman runs on a **daemon OS thread with its own synchronous Redis connection**,
+and the healthcheck runs as a **separate process**, for the same reason: on 2026-08-27
+the loop wedged for 8h45m with PID 1 alive at 0% CPU, so `restart: unless-stopped` never
+fired and the deadman — then an asyncio task on that loop — froze with it. A supervisor
+must not share a failure domain with what it supervises.
+
+Escalation is deliberately conservative: never on a probe error (a Redis blip must not
+thrash the container), never without a known uptime, and never inside the start-grace
+window (a fresh container inherits the previous process's stale heartbeat).
 
 ## Flow
 

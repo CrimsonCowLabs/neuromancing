@@ -13,7 +13,7 @@ from sqlalchemy import select
 from ..config import get_settings
 from ..db import SessionLocal
 from ..ingest.universe import is_crypto
-from ..marks import get_marks
+from ..marks import get_marks_with_feed_age
 from ..models.entities import Agent, Persona
 from ..trade_client import TradeClient
 
@@ -154,9 +154,9 @@ async def build_context(agent: dict, equity_open: bool = True) -> dict | None:
     symbols = set(universe) | set(positions)
     # Marks fall back to last price_bar close when a Redis quote is missing/expired,
     # so positions are never valued at $0 overnight. See app/marks.py.
-    marks = await get_marks(list(symbols))
+    marks, feed_age_s = await get_marks_with_feed_age(list(symbols))
 
-    equity_info = await trade.mark_to_market(account_id, marks)
+    equity_info = await trade.mark_to_market(account_id, marks, feed_age_s)
     equity = float(equity_info["total_equity"])
     cash = float(account["cash_balance"])
     buying_power = float(account.get("buying_power", cash))

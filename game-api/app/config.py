@@ -40,7 +40,16 @@ class Settings(BaseServiceSettings):
     ingest_watch_interval_s: float = 15.0        # how often the watchdog polls freshness
     ingest_rest_timeout_s: float = 30.0          # per blocking Alpaca REST call
     ingest_deadman_stale_s: float = 300.0        # deadman: os._exit(1) → container restart
-    ingest_health_stale_s: float = 300.0         # healthcheck + UI "data stale" threshold
+    # ingest_health_stale_s (healthcheck + UI "data stale" threshold) lives on
+    # BaseServiceSettings — trade-api shares it so "stale" has ONE definition.
+    # Loop-liveness escalation. Distinct from the feed knobs above: those measure whether
+    # DATA is arriving, these measure whether the event loop is still turning at all. Set
+    # well above the deadman so the cheap in-process restart always gets first attempt;
+    # only a loop too wedged to run its own deadman reaches the healthcheck's SIGKILL.
+    ingest_heartbeat_interval_s: float = 30.0    # how often the loop stamps its beat
+    ingest_heartbeat_stale_s: float = 900.0      # no beat past this = wedged loop
+    ingest_escalation_grace_s: float = 300.0     # min uptime before a kill may fire
+    ingest_deadman_poll_s: float = 30.0          # deadman thread's probe cadence
     # Fault injection for drills: when enabled, setting the Redis key `ingest:debug:freeze`
     # makes the crypto stream stop writing quotes (simulate a silent/half-open feed) so the
     # watchdog→deadman→recover chain can be exercised live. OFF in prod (default false).

@@ -21,6 +21,10 @@ class BaseServiceSettings(BaseSettings):
     price_hot_len: int = 500  # recent bars kept per (timeframe, symbol) in Redis
     price_timeframes: str = "1m,5m,1h,1d"  # comma-separated
     quote_ttl_s: int = 93600  # ~26h so quotes survive overnight/weekends
+    # ONE definition of "stale" across services: game-api's feed healthcheck + UI banner,
+    # and trade-api's mark-to-market staleness flag. Quotes outlive their usefulness by
+    # design (quote_ttl_s above), so age — not presence — is what makes a mark stale.
+    ingest_health_stale_s: float = 300.0
 
     @property
     def timeframes(self) -> list[str]:

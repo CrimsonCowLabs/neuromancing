@@ -69,9 +69,14 @@ class TradeClient:
             r.raise_for_status()
             return r.json()
 
-    async def mark_to_market(self, account_id: int, marks: dict[str, str]) -> dict:
+    async def mark_to_market(
+        self, account_id: int, marks: dict[str, str], feed_age_s: float | None = None
+    ) -> dict:
         async with await self._client() as c:
-            r = await c.post(f"/accounts/{account_id}/mark-to-market", json={"marks": marks})
+            r = await c.post(
+                f"/accounts/{account_id}/mark-to-market",
+                json={"marks": marks, "feed_age_s": feed_age_s},
+            )
             r.raise_for_status()
             return r.json()
 

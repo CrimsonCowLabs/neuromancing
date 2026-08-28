@@ -45,3 +45,37 @@ evolution gate threads it into each candidate backtest so a candidate is measure
 exact sizing + exit discipline it would trade under (`max_position_pct` → the backtest's
 `alloc_pct`; the stop/take-profit/trailing → the exit config). Absent keys fall back to the
 harness's live-like defaults (0.20 alloc, a mandatory 0.08 stop, 5 bps/side).
+
+### Feed freshness
+The age of the freshest **crypto** quote — the system's single answer to "is market data
+still flowing?" (`crypto_feed_age` in `game-api/app/ingest/health.py`). Crypto-only on
+purpose: crypto trades 24/7, so silence is unambiguous, whereas an equity quote falls silent
+every night because the *market closed*, not because anything broke. One signal against one
+threshold serves every consumer — the web "market data stale" banner, the leaderboard's
+`data_stale`, and trade-api's mark staleness. Presence is not freshness: quotes are cached
+~26h, so a dark feed still prices the whole book at frozen numbers.
+
+### Loop liveness
+Whether market-ingest's **event loop is still scheduling work**, evidenced by a heartbeat an
+ordinary task stamps as it runs. Deliberately a separate signal from feed freshness because
+the two have different cures — a stalled feed wants a reconnect, a dead loop wants a restart.
+A process can look healthy by every other measure (PID up, container up, quotes still in
+Redis) while its loop schedules nothing at all.
+
+### Wedged loop
+The failure mode where the ingest process is alive but its event loop has stopped scheduling:
+no heartbeat, no writes, and no watchdog, since every in-process supervisor is itself a task
+on the frozen loop. It is therefore the one condition nothing in-process can repair, and is
+escalated **out of process** — the container healthcheck runs as a separate process, so it
+survives the wedge and can restart the container. Reported as `WEDGED`, as distinct from
+`STALE` (feed stalled, loop fine). A supervisor must not share a failure domain with what it
+supervises.
+
+### Mark staleness
+Whether a snapshot's valuation should be trusted (`marks_are_stale` in
+`trade-api/app/engine/portfolio.py`, persisted as `EquitySnapshot.is_stale`). Two ways to
+lose that trust: a held symbol had no mark at all, or feed freshness says the pricing
+pipeline was dark when the snapshot was computed. Notably it is **not** the age of that
+snapshot's own marks — equity marks are hours old every night by design, so judging a
+valuation on them would flag nearly every out-of-hours snapshot and the flag would stop
+carrying information.

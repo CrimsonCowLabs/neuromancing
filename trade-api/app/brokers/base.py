@@ -46,7 +46,7 @@ class Broker(ABC):
 
     @abstractmethod
     async def mark_to_market(
-        self, account_id: int, marks: dict[str, Decimal]
+        self, account_id: int, marks: dict[str, Decimal], feed_age_s: float | None = None
     ) -> EquitySnapshot: ...
 
     @abstractmethod

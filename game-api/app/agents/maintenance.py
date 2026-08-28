@@ -13,7 +13,7 @@ with workflow.unsafe.imports_passed_through():
 
     from ..db import SessionLocal
     from ..leaderboard import rebuild
-    from ..marks import get_marks
+    from ..marks import get_marks_with_feed_age
     from ..models.entities import Agent
     from ..trade_client import TradeClient
 
@@ -32,9 +32,9 @@ async def mark_all_activity() -> dict:
             continue
         positions = await trade.list_positions(account["id"])
         # Marks fall back to last price_bar close (never $0) — see app/marks.py.
-        marks = await get_marks([p["symbol"] for p in positions])
+        marks, feed_age_s = await get_marks_with_feed_age([p["symbol"] for p in positions])
         try:
-            await trade.mark_to_market(account["id"], marks)
+            await trade.mark_to_market(account["id"], marks, feed_age_s)
             marked += 1
         except Exception as e:  # noqa: BLE001
             log.warning("mark failed for %s: %s", a.handle, e)
