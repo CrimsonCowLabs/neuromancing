@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -271,12 +272,7 @@ async def options_backtest_adhoc(
         if len(bars_by_tf.get("1d", [])) < RV_WINDOW + 5:
             continue
         metrics = strategy.backtest(bars_by_tf, config)
-        m = {"trades": metrics.trades, "win_rate": metrics.win_rate,
-             "total_return": metrics.total_return, "max_drawdown": metrics.max_drawdown,
-             "avg_credit": metrics.avg_credit, "avg_return_on_risk": metrics.avg_return_on_risk,
-             "assignment_rate": metrics.assignment_rate, "final_equity": metrics.final_equity,
-             "underlying": u.upper()}
-        per.append(m)
+        per.append({**asdict(metrics), "underlying": u.upper()})
     if not per:
         raise HTTPException(400, "no daily bars for any requested underlying")
 
