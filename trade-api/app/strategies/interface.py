@@ -30,6 +30,7 @@ from .base import Bar, Signal
 from .composed import evaluate_composed
 from .dsl import evaluate_dsl
 from .library import SIGNAL_FNS
+from .options_backtest import backtest_structure
 
 
 # --- config + metrics ------------------------------------------------------
@@ -41,6 +42,19 @@ class BacktestConfig:
     alloc_pct: float = DEFAULT_ALLOC_PCT
     cost_bps: float = DEFAULT_COST_BPS
     exit_config: ExitConfig = field(default_factory=ExitConfig)
+
+
+@dataclass(frozen=True)
+class OptionsBacktestConfig:
+    """Options backtest knobs: the synthetic-chain pricing parameters the structure is
+    marked and settled under (risk-free rate, dividend yield, variance-risk premium, skew,
+    term). Defaults mirror the settings-driven live values."""
+    starting_cash: float = 100_000.0
+    r: float = 0.04
+    q: float = 0.0
+    vrp: float = 1.15
+    skew: float = 0.35
+    term: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -59,6 +73,41 @@ class EquityMetrics:
         return cls(**m)
 
 
+@dataclass(frozen=True)
+class OptionsMetrics:
+    """Defined-risk option-structure backtest metrics. A DISTINCT result shape from
+    `EquityMetrics` (credit/return-on-risk/assignment rather than equity-curve stats) so the
+    router can serialize each to the right response model without guessing. Fields match
+    `backtest_structure`'s per-underlying dict."""
+    trades: int
+    win_rate: float
+    total_return: float
+    max_drawdown: float
+    avg_credit: float
+    avg_return_on_risk: float
+    assignment_rate: float
+    final_equity: float
+
+    @classmethod
+    def from_structure(cls, m: dict) -> OptionsMetrics:
+        return cls(trades=m["trades"], win_rate=m["win_rate"], total_return=m["total_return"],
+                   max_drawdown=m["max_drawdown"], avg_credit=m["avg_credit"],
+                   avg_return_on_risk=m["avg_return_on_risk"],
+                   assignment_rate=m["assignment_rate"], final_equity=m["final_equity"])
+
+
+# The one metrics type a Strategy.backtest returns: a discriminated union tagged by concrete
+# type — equity-curve stats vs options credit/assignment stats — that the router maps to the
+# right response model.
+Metrics = EquityMetrics | OptionsMetrics
+
+
+class NotALiveStrategyError(RuntimeError):
+    """Raised when a backtest-only strategy (an option structure) is asked for a live signal.
+    Encodes the invariant in the type: an option structure is never traded live, so it must
+    not silently emit a tradeable signal."""
+
+
 # --- interface -------------------------------------------------------------
 @runtime_checkable
 class Strategy(Protocol):
@@ -69,7 +118,8 @@ class Strategy(Protocol):
 
     def evaluate(self, bars_by_tf: dict[str, list[Bar]]) -> Signal: ...
 
-    def backtest(self, bars_by_tf: dict[str, list[Bar]], config: BacktestConfig) -> EquityMetrics: ...
+    def backtest(self, bars_by_tf: dict[str, list[Bar]],
+                 config: BacktestConfig | OptionsBacktestConfig) -> Metrics: ...
 
 
 def _only_series(bars_by_tf: dict[str, list[Bar]]) -> list[Bar]:
@@ -155,17 +205,46 @@ class IndicatorDslStrategy:
         return EquityMetrics.from_replay(m)
 
 
-_SIGNAL_KINDS = {
+class OptionStructureStrategy:
+    """A defined-risk option structure (backtest-only). Wraps the existing pricer +
+    `backtest_structure` unchanged. It lives only on the ad-hoc backtest path — never
+    persisted as a Strategy row, never traded live — so it has NO live signal: `evaluate`
+    raises rather than emitting a tradeable action. Built from a `validate_structure`-validated
+    spec (validation stays the router's job, as for the other kinds)."""
+
+    def __init__(self, spec: dict):
+        self.spec = spec
+
+    def required_timeframes(self, request_timeframe: str | None = None) -> list[str]:
+        return ["1d"]  # the pricer steps the underlying's daily bars
+
+    def evaluate(self, bars_by_tf: dict[str, list[Bar]]) -> Signal:
+        raise NotALiveStrategyError(
+            "option structures are backtest-only and have no live signal")
+
+    def backtest(self, bars_by_tf: dict[str, list[Bar]],
+                 config: OptionsBacktestConfig) -> OptionsMetrics:
+        bars = bars_by_tf.get("1d") or _only_series(bars_by_tf)
+        m = backtest_structure(self.spec, bars, starting_cash=config.starting_cash,
+                               r=config.r, q=config.q, vrp=config.vrp, skew=config.skew,
+                               term=config.term)
+        return OptionsMetrics.from_structure(m)
+
+
+# The factory's kind vocabulary is a SUPERSET of the persisted StrategyKind enum:
+# `option_structure` exists only here (ad-hoc, backtest-only), never as a DB row.
+_KINDS = {
     "signal_fn": SignalFnStrategy,
     "rule_dsl": RuleDslStrategy,
     "indicator_dsl": IndicatorDslStrategy,
+    "option_structure": OptionStructureStrategy,
 }
 
 
 def build_strategy(kind: str, spec: dict) -> Strategy:
     """Build the one `Strategy` for `(kind, spec)`. Fails loudly at construction on an
     unknown kind — a caller never silently gets a no-op strategy."""
-    cls = _SIGNAL_KINDS.get(kind)
+    cls = _KINDS.get(kind)
     if cls is None:
         raise ValueError(f"unknown strategy kind: {kind}")
     return cls(spec)

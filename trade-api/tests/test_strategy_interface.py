@@ -15,6 +15,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from neuromancing_shared.options_strategy import validate_structure
+
 from app.strategies import backtest as free
 from app.strategies.base import Bar
 from app.strategies.engine import evaluate as free_evaluate
@@ -23,11 +25,16 @@ from app.strategies.interface import (
     BacktestConfig,
     EquityMetrics,
     IndicatorDslStrategy,
+    NotALiveStrategyError,
+    OptionsBacktestConfig,
+    OptionsMetrics,
+    OptionStructureStrategy,
     RuleDslStrategy,
     SignalFnStrategy,
     Strategy,
     build_strategy,
 )
+from app.strategies.options_backtest import backtest_structure
 from app.strategies.spec import validate_spec
 
 UTC = timezone.utc
@@ -152,3 +159,49 @@ def test_backtest_preserves_the_mandatory_stop_default():
     loose = strat.backtest(bars, BacktestConfig(exit_config=ExitConfig(stop_loss_pct=0.90)))
     assert default_stop.trades == 1 and loose.trades == 1
     assert default_stop.final_equity > loose.final_equity  # the default stop cut the loss
+
+
+# ---------------- option structures fold into the same interface ----------------
+_CSP = validate_structure({"archetype": "cash_secured_put", "dte": 30,
+                           "short_delta": 0.30, "alloc_pct": 0.5})
+
+
+def _daily(closes: list[float]) -> list[Bar]:
+    return [Bar(ts=_T0 + timedelta(days=i), open=c, high=c, low=c, close=c, volume=0.0)
+            for i, c in enumerate(closes)]
+
+
+def test_build_strategy_builds_an_option_structure():
+    strat = build_strategy("option_structure", _CSP)
+    assert isinstance(strat, OptionStructureStrategy)
+    assert isinstance(strat, Strategy)
+    assert strat.required_timeframes() == ["1d"]
+
+
+def test_option_structure_evaluate_is_inert():
+    # A backtest-only structure has no live signal — it must not silently emit a tradeable
+    # action, so evaluate raises rather than returning one.
+    strat = build_strategy("option_structure", _CSP)
+    with pytest.raises(NotALiveStrategyError):
+        strat.evaluate({"1d": _daily([100.0] * 40)})
+
+
+def test_option_structure_backtest_matches_backtest_structure():
+    bars = _daily([100 * (1.0015 ** i) for i in range(150)])
+    cfg = OptionsBacktestConfig()
+    got = build_strategy("option_structure", _CSP).backtest({"1d": bars}, cfg)
+    expected = backtest_structure(_CSP, bars, starting_cash=cfg.starting_cash, r=cfg.r,
+                                  q=cfg.q, vrp=cfg.vrp, skew=cfg.skew, term=cfg.term)
+    assert isinstance(got, OptionsMetrics)
+    assert got == OptionsMetrics.from_structure(expected)
+    assert got.trades > 0  # this uptrend trades
+
+
+def test_options_and_equity_metrics_are_distinct_union_arms():
+    # The router discriminates on the Metrics type; the two arms must be distinguishable.
+    opts = build_strategy("option_structure", _CSP).backtest(
+        {"1d": _daily([100 * (1.0015 ** i) for i in range(150)])}, OptionsBacktestConfig())
+    equity = build_strategy("rule_dsl", _RULE_DSL).backtest(
+        {"1m": _bars([100.0] * 40 + [90.0] * 20)}, BacktestConfig())
+    assert isinstance(opts, OptionsMetrics) and not isinstance(opts, EquityMetrics)
+    assert isinstance(equity, EquityMetrics) and not isinstance(equity, OptionsMetrics)
