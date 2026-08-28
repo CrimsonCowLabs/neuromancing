@@ -17,10 +17,9 @@ import pytest
 
 from neuromancing_shared.options_strategy import validate_structure
 
-from app.strategies import backtest as free
 from app.strategies.base import Bar
-from app.strategies.engine import evaluate as free_evaluate
-from app.strategies.engine import evaluate_multi as free_evaluate_multi
+from app.strategies.composed import evaluate_composed
+from app.strategies.dsl import evaluate_dsl
 from app.strategies.interface import (
     BacktestConfig,
     EquityMetrics,
@@ -34,6 +33,7 @@ from app.strategies.interface import (
     Strategy,
     build_strategy,
 )
+from app.strategies.library import SIGNAL_FNS
 from app.strategies.options_backtest import backtest_structure
 from app.strategies.spec import validate_spec
 
@@ -103,47 +103,45 @@ def test_indicator_dsl_requires_the_spec_derived_timeframes():
     assert build_strategy("indicator_dsl", spec).required_timeframes("1m") == ["5m", "1h", "1d"]
 
 
-# ---------------- evaluate equivalence ----------------
-@pytest.mark.parametrize("kind,spec,closes", [
-    ("signal_fn", _SIGNAL_FN, [100 - i for i in range(40)] + [60 + i * 3 for i in range(20)]),
-    ("rule_dsl", _RULE_DSL, [100 - i * 2 for i in range(30)]),
-])
-def test_single_series_evaluate_matches_free_function(kind, spec, closes):
-    bars = _bars(closes)
+# ---------------- evaluate delegates to the leaf (no reimplementation) ----------------
+def test_signal_fn_evaluate_delegates_to_the_leaf():
+    bars = _bars([100 - i for i in range(40)] + [60 + i * 3 for i in range(20)])
+    got = build_strategy("signal_fn", _SIGNAL_FN).evaluate({"1m": bars})
+    assert got == SIGNAL_FNS[_SIGNAL_FN["fn"]]([b.close for b in bars], _SIGNAL_FN)
+
+
+def test_rule_dsl_evaluate_delegates_to_the_leaf():
+    bars = _bars([100 - i * 2 for i in range(30)])
+    got = build_strategy("rule_dsl", _RULE_DSL).evaluate({"5m": bars})
+    assert got == evaluate_dsl(_RULE_DSL, [b.close for b in bars])
+
+
+def test_indicator_dsl_evaluate_delegates_to_the_leaf():
+    bars_by_tf = {"5m": _bars(_oscillating(), step_min=5)}
+    got = build_strategy("indicator_dsl", _INDICATOR_DSL).evaluate(bars_by_tf)
+    assert got == evaluate_composed(_INDICATOR_DSL, bars_by_tf)
+
+
+# ---------------- the single-tf collapse ----------------
+@pytest.mark.parametrize("kind,spec", [("signal_fn", _SIGNAL_FN), ("rule_dsl", _RULE_DSL)])
+def test_single_series_result_is_independent_of_the_map_key(kind, spec):
+    # A single-tf kind driven by a one-entry map is independent of WHICH timeframe the one
+    # series is keyed under — identical signal and identical backtest. This is the collapse
+    # that made the single-vs-multi split disappear (the old "bare bar list" case).
+    bars = _bars([100.0] * 40 + [111.0] + [111.0 * (1 + 0.012 * k) for k in range(1, 12)])
     strat = build_strategy(kind, spec)
-    # one-entry bars-by-tf map ≡ the old bare bar list
-    assert strat.evaluate({"1m": bars}) == free_evaluate(kind, spec, bars)
+    assert strat.evaluate({"1m": bars}) == strat.evaluate({"1d": bars})
+    cfg = BacktestConfig(cost_bps=0.0)
+    assert strat.backtest({"1m": bars}, cfg) == strat.backtest({"1d": bars}, cfg)
 
 
-def test_indicator_dsl_evaluate_matches_free_function():
+def test_indicator_dsl_backtest_is_deterministic_and_trades():
     bars_by_tf = {"5m": _bars(_oscillating(), step_min=5)}
     strat = build_strategy("indicator_dsl", _INDICATOR_DSL)
-    assert strat.evaluate(bars_by_tf) == free_evaluate_multi("indicator_dsl", _INDICATOR_DSL, bars_by_tf)
-
-
-# ---------------- backtest equivalence (same numbers as before) ----------------
-def test_single_series_backtest_matches_bare_list_free_function():
-    # The load-bearing collapse: a one-entry bars-by-tf map yields the identical metrics the
-    # old bare-list `backtest` produced.
-    closes = [100.0] * 40 + [111.0] + [111.0 * (1 + 0.012 * k) for k in range(1, 12)]
-    bars = _bars(closes)
-    cfg = BacktestConfig(cost_bps=0.0)
-    got = build_strategy("rule_dsl", _RULE_DSL).backtest({"1m": bars}, cfg)
-    expected = free.backtest("rule_dsl", _RULE_DSL, bars, cfg.starting_cash,
-                             alloc_pct=cfg.alloc_pct, cost_bps=cfg.cost_bps,
-                             exit_config=cfg.exit_config)
-    assert got == EquityMetrics(**expected)
-
-
-def test_indicator_dsl_backtest_matches_backtest_multi():
-    bars_by_tf = {"5m": _bars(_oscillating(), step_min=5)}
-    cfg = BacktestConfig(cost_bps=0.0)
-    got = build_strategy("indicator_dsl", _INDICATOR_DSL).backtest(bars_by_tf, cfg)
-    expected = free.backtest_multi("indicator_dsl", _INDICATOR_DSL, bars_by_tf, cfg.starting_cash,
-                                   alloc_pct=cfg.alloc_pct, cost_bps=cfg.cost_bps,
-                                   exit_config=cfg.exit_config)
-    assert got == EquityMetrics(**expected)
-    assert got.trades >= 1
+    m1 = strat.backtest(bars_by_tf, BacktestConfig(cost_bps=0.0))
+    m2 = strat.backtest(bars_by_tf, BacktestConfig(cost_bps=0.0))
+    assert m1 == m2 and isinstance(m1, EquityMetrics)
+    assert m1.trades >= 1
 
 
 def test_backtest_preserves_the_mandatory_stop_default():

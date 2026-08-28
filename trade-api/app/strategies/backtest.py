@@ -29,9 +29,6 @@ from neuromancing_shared.money import ZERO, D, quantize_money, quantize_qty
 
 from ..engine.matching import evaluate_exit
 from ..engine.portfolio import PositionState, apply_fill
-from .base import Bar
-from .composed import base_timeframe
-from .engine import evaluate, evaluate_multi
 
 DEFAULT_COST_BPS = 5.0        # per side (entry AND exit); ~10bps round trip
 DEFAULT_ALLOC_PCT = 0.20      # fixed notional per entry = 20% of STARTING cash
@@ -176,40 +173,3 @@ def _replay(n_bars: int, price_at, action_at, *, starting_cash: float, alloc_pct
             book.step(action, price)
         curve.append(book.equity(price))
     return _metrics(book, curve, n_bars, D(starting_cash))
-
-
-def backtest(kind: str, spec: dict, bars: list[Bar], starting_cash: float = 10000.0, *,
-             alloc_pct: float = DEFAULT_ALLOC_PCT, cost_bps: float = DEFAULT_COST_BPS,
-             exit_config: ExitConfig | None = None) -> dict:
-    ec = exit_config or ExitConfig()
-
-    def action_at(i: int) -> str | None:
-        return evaluate(kind, spec, bars[: i + 1]).action if i + 1 >= _WARMUP else None
-
-    return _replay(len(bars), lambda i: bars[i].close, action_at,
-                   starting_cash=starting_cash, alloc_pct=alloc_pct, cost_bps=cost_bps,
-                   exit_config=ec)
-
-
-def backtest_multi(kind: str, spec: dict, bars_by_tf: dict[str, list[Bar]],
-                   starting_cash: float = 10000.0, *, alloc_pct: float = DEFAULT_ALLOC_PCT,
-                   cost_bps: float = DEFAULT_COST_BPS,
-                   exit_config: ExitConfig | None = None) -> dict:
-    """Multi-timeframe backtest for indicator_dsl. Steps 'now' through the BASE timeframe
-    only; higher-timeframe series are passed in full and the composed evaluator's as-of
-    filter drops any bar not yet closed — so there is NO lookahead. Shares the exact
-    accounting + exit-replay of `backtest` via `_replay`."""
-    ec = exit_config or ExitConfig()
-    base_tf = base_timeframe(spec)
-    base = bars_by_tf.get(base_tf) or []
-    higher = {tf: bb for tf, bb in bars_by_tf.items() if tf != base_tf}
-
-    def action_at(i: int) -> str | None:
-        if i + 1 < _WARMUP:
-            return None
-        window = {base_tf: base[: i + 1], **higher}  # higher tfs filtered as-of by composed
-        return evaluate_multi(kind, spec, window).action
-
-    return _replay(len(base), lambda i: base[i].close, action_at,
-                   starting_cash=starting_cash, alloc_pct=alloc_pct, cost_bps=cost_bps,
-                   exit_config=ec)
