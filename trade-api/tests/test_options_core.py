@@ -139,7 +139,8 @@ def test_short_strategy_backtests_short_flat():
     (stop loosened so the post-entry rise doesn't stop it out first)."""
     from datetime import datetime, timedelta, timezone
 
-    from app.strategies.backtest import ExitConfig, backtest_multi
+    from app.strategies import BacktestConfig, build_strategy
+    from app.strategies.backtest import ExitConfig
     from app.strategies.base import Bar
     from app.strategies.spec import validate_spec
 
@@ -154,7 +155,7 @@ def test_short_strategy_backtests_short_flat():
     closes = [120 - i for i in range(45)] + [76 + i * 3 for i in range(8)] + [100 - i * 2 for i in range(40)]
     bars = {"5m": [Bar(ts=t0 + timedelta(minutes=5 * i), open=c, high=c, low=c, close=c, volume=1)
                    for i, c in enumerate(closes)]}
-    r = backtest_multi("indicator_dsl", spec, bars, cost_bps=0.0,
-                       exit_config=ExitConfig(stop_loss_pct=0.90, take_profit_pct=0.08))
+    cfg = BacktestConfig(cost_bps=0.0, exit_config=ExitConfig(stop_loss_pct=0.90, take_profit_pct=0.08))
+    r = build_strategy("indicator_dsl", spec).backtest(bars, cfg).to_dict()
     assert r["trades"] == 1 and r["win_rate"] == 1.0        # short opened and covered lower
     assert r["final_equity"] > 10000.0                      # profited on the decline

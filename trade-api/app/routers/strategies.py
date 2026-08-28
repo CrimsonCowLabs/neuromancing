@@ -31,30 +31,46 @@ from ..schemas import (
     StrategyStatusUpdate,
 )
 from ..security import require_service_token
-from ..strategies import evaluate
-from ..strategies.backtest import DEFAULT_ALLOC_PCT, DEFAULT_COST_BPS, ExitConfig, backtest, backtest_multi
-from ..strategies.composed import required_timeframes
+from ..strategies import OPTION_STRUCTURE_KIND, build_strategy, list_house_strategies
+from ..strategies.backtest import DEFAULT_ALLOC_PCT, DEFAULT_COST_BPS, ExitConfig
 from ..strategies.data import load_bars
-from ..strategies.engine import evaluate_multi, list_house_strategies
+from ..strategies.interface import BacktestConfig
+from ..strategies.interface import Strategy as StrategyInterface
 from ..strategies.library import SIGNAL_FNS
-from ..strategies.options_backtest import RV_WINDOW, backtest_structure
+from ..strategies.options_backtest import RV_WINDOW
 from ..strategies.spec import validate_spec
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
 
-def _bt_kwargs(body: AdhocBacktestRequest | BacktestRequest) -> dict:
-    """Turn a backtest request's optional sizing/cost/exit fields into keyword args for
-    `backtest` / `backtest_multi`, applying the harness defaults for anything omitted."""
-    return {
-        "alloc_pct": body.alloc_pct if body.alloc_pct is not None else DEFAULT_ALLOC_PCT,
-        "cost_bps": body.cost_bps if body.cost_bps is not None else DEFAULT_COST_BPS,
-        "exit_config": ExitConfig(
+def _bt_config(body: AdhocBacktestRequest | BacktestRequest) -> BacktestConfig:
+    """Build the one backtest `config` from a request's optional sizing/cost/exit fields,
+    applying the harness defaults for anything omitted."""
+    return BacktestConfig(
+        starting_cash=body.starting_cash,
+        alloc_pct=body.alloc_pct if body.alloc_pct is not None else DEFAULT_ALLOC_PCT,
+        cost_bps=body.cost_bps if body.cost_bps is not None else DEFAULT_COST_BPS,
+        exit_config=ExitConfig(
             stop_loss_pct=body.stop_loss_pct,
             take_profit_pct=body.take_profit_pct,
             trailing_stop_pct=body.trailing_stop_pct,
         ),
-    }
+    )
+
+
+async def _load_bars_by_tf(
+    session: AsyncSession, strat: StrategyInterface, symbol: str, limit: int, *,
+    request_timeframe: str | None = None, window=None,
+) -> dict[str, list]:
+    """The one bar loader for every endpoint: ask the strategy which timeframes it needs,
+    then load each (deduped; each hot-cache served). Replaces the three copy-pasted
+    per-timeframe loops + `kind ==` branches the router used to carry."""
+    bars_by_tf: dict[str, list] = {}
+    for tf in strat.required_timeframes(request_timeframe):
+        bb = await load_bars(session, symbol, tf, limit, window=window)
+        if bb:
+            bars_by_tf[tf] = bb
+    return bars_by_tf
 
 
 def _validate_for_kind(kind: str, spec: dict) -> dict:
@@ -157,31 +173,22 @@ async def evaluate_strategy(
 ) -> list[SignalOut]:
     """Run a deterministic strategy over recent bars for each symbol, optionally
     persisting strategy_signal rows. This is what the game-api decision loop calls."""
-    strat = await session.get(Strategy, strategy_id)
-    if strat is None:
+    row = await session.get(Strategy, strategy_id)
+    if row is None:
         raise HTTPException(404, "strategy not found")
 
-    kind = strat.kind.value
-    # indicator_dsl carries its own (possibly multiple) timeframes; those win over
-    # the request's timeframe. Single-series kinds use the request timeframe.
-    tfs = required_timeframes(strat.spec) if kind == "indicator_dsl" else None
+    # One interface: indicator_dsl carries its own (possibly multiple) timeframes; those win
+    # over the request's; single-series kinds use the request timeframe — the strategy owns
+    # that rule now, so the router no longer branches on `kind`.
+    strat = build_strategy(row.kind.value, row.spec)
 
     out: list[SignalOut] = []
     for symbol in body.symbols:
-        if kind == "indicator_dsl":
-            bars_by_tf = {}
-            for tf in tfs:  # deduped; each hot-cache served
-                bb = await load_bars(session, symbol, tf, body.lookback)
-                if bb:
-                    bars_by_tf[tf] = bb
-            if not bars_by_tf:
-                continue
-            sig = evaluate_multi(kind, strat.spec, bars_by_tf)
-        else:
-            bars = await load_bars(session, symbol, body.timeframe, body.lookback)
-            if not bars:
-                continue
-            sig = evaluate(kind, strat.spec, bars)
+        bars_by_tf = await _load_bars_by_tf(
+            session, strat, symbol, body.lookback, request_timeframe=body.timeframe)
+        if not bars_by_tf:
+            continue
+        sig = strat.evaluate(bars_by_tf)
         out.append(
             SignalOut(symbol=symbol, action=sig.action, strength=sig.strength, features=sig.features)
         )
@@ -214,21 +221,15 @@ async def backtest_adhoc(
     except ValueError as e:
         raise HTTPException(422, f"invalid strategy spec: {e}")
     window = (body.window.start, body.window.end) if body.window else None
-    if body.kind == "indicator_dsl":
-        bars_by_tf = {}
-        for tf in required_timeframes(spec):
-            bb = await load_bars(session, body.symbol, tf, 5000, window=window)
-            if bb:
-                bars_by_tf[tf] = bb
-        if not bars_by_tf:
-            raise HTTPException(400, "no bars for symbol/window")
-        metrics = backtest_multi(body.kind, spec, bars_by_tf, body.starting_cash, **_bt_kwargs(body))
-    else:
-        bars = await load_bars(session, body.symbol, "1m", 5000, window=window)
-        if not bars:
-            raise HTTPException(400, "no bars for symbol/window")
-        metrics = backtest(body.kind, spec, bars, body.starting_cash, **_bt_kwargs(body))
-    return BacktestResult(symbol=body.symbol, **metrics)
+    strat = build_strategy(body.kind, spec)
+    # Ad-hoc single-series kinds default to 1m (they carry no request timeframe);
+    # indicator_dsl ignores it and uses its own spec timeframes.
+    bars_by_tf = await _load_bars_by_tf(
+        session, strat, body.symbol, 5000, request_timeframe="1m", window=window)
+    if not bars_by_tf:
+        raise HTTPException(400, "no bars for symbol/window")
+    metrics = strat.backtest(bars_by_tf, _bt_config(body))
+    return BacktestResult(symbol=body.symbol, **metrics.to_dict())
 
 
 @router.post("/options-backtest", response_model=OptionsBacktestResult,
@@ -243,16 +244,20 @@ async def options_backtest_adhoc(
     except ValueError as e:
         raise HTTPException(422, f"invalid option structure: {e}")
     s = get_settings()
-    knobs = dict(r=s.options_risk_free_rate, q=s.options_div_yield, vrp=s.options_vrp_mult,
-                 skew=s.options_skew, term=s.options_term)
+    strat = build_strategy(OPTION_STRUCTURE_KIND, spec)
+    config = BacktestConfig(
+        starting_cash=body.starting_cash, r=s.options_risk_free_rate, q=s.options_div_yield,
+        vrp=s.options_vrp_mult, skew=s.options_skew, term=s.options_term)
     window = (body.window.start, body.window.end) if body.window else None
 
+    # Cross-underlying aggregation stays a ROUTER concern: the interface is per-series (one
+    # structure, one underlying's bars, one result); the router loops and aggregates.
     per: list[dict] = []
     for u in body.underlyings:
         bars = await load_bars(session, u.upper(), "1d", 5000, window=window)
         if len(bars) < RV_WINDOW + 5:
             continue
-        m = backtest_structure(spec, bars, starting_cash=body.starting_cash, **knobs)
+        m = strat.backtest({"1d": bars}, config).to_dict()
         m["underlying"] = u.upper()
         per.append(m)
     if not per:
@@ -278,22 +283,13 @@ async def options_backtest_adhoc(
 async def backtest_strategy(
     strategy_id: int, body: BacktestRequest, session: AsyncSession = Depends(get_session)
 ) -> BacktestResult:
-    strat = await session.get(Strategy, strategy_id)
-    if strat is None:
+    row = await session.get(Strategy, strategy_id)
+    if row is None:
         raise HTTPException(404, "strategy not found")
-    if strat.kind.value == "indicator_dsl":
-        bars_by_tf = {}
-        for tf in required_timeframes(strat.spec):
-            bb = await load_bars(session, body.symbol, tf, body.limit)
-            if bb:
-                bars_by_tf[tf] = bb
-        if not bars_by_tf:
-            raise HTTPException(400, "no bars for symbol")
-        metrics = backtest_multi(strat.kind.value, strat.spec, bars_by_tf, body.starting_cash,
-                                 **_bt_kwargs(body))
-    else:
-        bars = await load_bars(session, body.symbol, body.timeframe, body.limit)
-        if not bars:
-            raise HTTPException(400, "no bars for symbol")
-        metrics = backtest(strat.kind.value, strat.spec, bars, body.starting_cash, **_bt_kwargs(body))
-    return BacktestResult(symbol=body.symbol, **metrics)
+    strat = build_strategy(row.kind.value, row.spec)
+    bars_by_tf = await _load_bars_by_tf(
+        session, strat, body.symbol, body.limit, request_timeframe=body.timeframe)
+    if not bars_by_tf:
+        raise HTTPException(400, "no bars for symbol")
+    metrics = strat.backtest(bars_by_tf, _bt_config(body))
+    return BacktestResult(symbol=body.symbol, **metrics.to_dict())

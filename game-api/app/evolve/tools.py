@@ -14,6 +14,7 @@ from neuromancing_shared.strategy_spec import (
     KNOWN_FNS,
     OPS,
     SOURCES,
+    required_timeframes,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,7 +22,6 @@ from . import diary, memory
 
 # Archive depth per timeframe (mirrors PRICE_BACKFILL_DAYS) — bounds walk-forward spans.
 _TF_DEPTH_DAYS = {"1m": 5, "5m": 20, "1h": 120, "1d": 365}
-_TF_SECONDS = {"1m": 60, "5m": 300, "1h": 3600, "1d": 86400}
 
 
 def indicator_vocabulary() -> dict:
@@ -69,16 +69,11 @@ async def gather_performance(session: AsyncSession, agent_id: int, since_days: i
     return agg
 
 
-def _base_tf(spec: dict) -> str:
-    tfs = [i.get("timeframe") for i in spec.get("indicators", []) if i.get("timeframe")]
-    return spec.get("base_timeframe") or (min(tfs, key=lambda t: _TF_SECONDS.get(t, 60)) if tfs else "1m")
-
-
 def walk_forward_windows(spec: dict, now: datetime) -> list[tuple[datetime, datetime]]:
     """Two non-overlapping calendar spans sized to the spec's shallowest timeframe's
-    archive depth (so a 5m strategy is tested on real 5m history)."""
-    tfs = {i.get("timeframe") for i in spec.get("indicators", []) if i.get("timeframe")}
-    tfs.add(_base_tf(spec))
+    archive depth (so a 5m strategy is tested on real 5m history). The spec's timeframes
+    come from the shared rule — identical code to what trade-api evaluates it with."""
+    tfs = required_timeframes(spec)
     depth = min(_TF_DEPTH_DAYS.get(tf, 20) for tf in tfs)
     span = max(2, depth // 3)  # leave a gap; two spans within the archive
     w1 = (now - timedelta(days=span), now)
